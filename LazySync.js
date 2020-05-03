@@ -16,11 +16,11 @@ export const Z = {
       this[model] = new LazySync({ model })
     })
   },
-  onChange ({ c: created = [], r: related = [], u: updated = [], d: deleted = [], u: undeleted = [] }) {
-    console.log('changes', { created, related, updated, deleted, undeleted });
+  onChange ({ c: created = [], r: related = [], u: updated = [], d: deleted = [], z: zombies = [] }) {
+    console.log('changes', { created, related, updated, deleted, zombies });
 
-    [...created, ...related, ...deleted, ...undeleted]
-      .forEach(model => {
+    [...created, ...related, ...deleted, ...zombies]
+      .forEach(([model]) => {
         this[model].invalidate()
       })
 
@@ -36,8 +36,8 @@ export const Z = {
   },
   methods: {
     async create ({ model, objValues }) {},
-    async addMember ({ model, parentEntryId, memberModel, memberEntryId }) {},
-    async removeMember ({ model, parentEntryId, memberModel, memberEntryId }) {},
+    async addMember ({ model, entryId, memberModel, memberEntryId }) {},
+    async removeMember ({ model, entryId, memberModel, memberEntryId }) {},
     async count ({ model, where = {}, search = {} }) {},
     async find ({ model, where = {}, limit = undefined, offset = 0, search = {}, order = [] }) {},
     async get ({ model, entryIds = [] }) {},
@@ -200,31 +200,31 @@ class LazySync {
     return Z.methods.delete({ model, entryId })
   }
 
-  addMember (parentEntryId, memberModel, memberEntryId) {
+  addMember (entryId, memberModel, memberEntryId) {
     const { model } = this
     return Z.methods.addMember({
       model,
-      parentEntryId,
+      entryId,
       memberModel,
       memberEntryId
     })
   }
 
-  removeMember (parentEntryId, memberModel, memberEntryId) {
+  removeMember (entryId, memberModel, memberEntryId) {
     const { model } = this
     return Z.methods.removeMember({
       model,
-      parentEntryId,
+      entryId,
       memberModel,
       memberEntryId
     })
   }
 
-  setMembers (parentEntryId, memberModel, memberEntryIds) {
+  setMembers (entryId, memberModel, memberEntryIds) {
     const { model } = this
     return Z.methods.setMembers({
       model,
-      parentEntryId,
+      entryId,
       memberModel,
       memberEntryIds
     })

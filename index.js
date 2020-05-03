@@ -4,38 +4,27 @@ import Sequelize from 'sequelize'
 const { Op } = Sequelize
 
 let db = {}
-let changeListener = ({ created, related, updated, deleted, undeleted }) => {}
+let changeListener = ({ created, related, updated, deleted, zombies }) => {}
 
 export const crud = {
   init (dbModels, changeCallback) {
     db = dbModels
     changeListener = changeCallback
   },
-  addMember: async function ({ model, parentEntryId, memberModel, memberEntryId }) {
-    return addOrRemoveMember('add', { model, parentEntryId, memberModel, memberEntryId })
+  addMember: async function ({ model, entryId, memberModel, memberEntryId }) {
+    return addOrRemoveMember('add', { model, entryId, memberModel, memberEntryId })
   },
-  removeMember: async function ({ model, parentEntryId, memberModel, memberEntryId }) {
-    return addOrRemoveMember('remove', { model, parentEntryId, memberModel, memberEntryId })
+  removeMember: async function ({ model, entryId, memberModel, memberEntryId }) {
+    return addOrRemoveMember('remove', { model, entryId, memberModel, memberEntryId })
   },
   count: async function ({ model, where = {}, search = {} }) {
-    if (search && typeof search === 'object') {
-      setSearchQuery(model, where, search)
-    }
-
-    const parentKey = getParentModel(model, where)
-    if (parentKey) {
-      const parentId = where[parentKey]
-      const parent = await db[parentKey].findByPk(parentId)
-      const countAccessor = db[parentKey].associations[model].accessors.count
-
-      delete where[parentKey]
-      return parent[countAccessor]({ where })
-    }
-
-    return db[model].count({ where })
+    const include = []
+    setSearchQuery(model, where, search, include)
+    return db[model].count({ where, include })
   },
   create: async function ({ model, objValues }) {
     const newEntry = await db[model].create(objValues)
+    const entryId = newEntry.id
     Object.keys(objValues)
       .forEach(memberModel => {
         const association = db[model].associations[memberModel]
@@ -44,7 +33,7 @@ export const crud = {
             const memberEntryIds = objValues[memberModel]
             this.setMembers({
               model,
-              parentEntryId: newEntry.id,
+              entryId,
               memberModel,
               memberEntryIds
             })
@@ -54,7 +43,7 @@ export const crud = {
     // TODO prevent duplicate events from calling both setMembers and this
     changeListener({
       creates: [
-        [model, [newEntry.id]]
+        [model, [entryId]]
       ]
     })
     return newEntry
@@ -62,10 +51,6 @@ export const crud = {
   find: async function ({ model, where = {}, limit = undefined, offset = 0, search = {}, order = [] }) {
     const attributes = ['id']
     const include = []
-
-    if (search && typeof search === 'object') {
-      setSearchQuery(model, where, search)
-    }
 
     // order by name by default, if model has name field
     if (!Array.isArray(order) || order.length === 0) {
@@ -82,22 +67,7 @@ export const crud = {
       }
     }
 
-    getParentModel(model, where).forEach(parentModel => {
-      const parentId = where[parentModel]
-      // since it might be included by the "order" code above already
-      let inc = include.find(inc => inc.model === db[parentModel])
-      if (!inc) {
-        inc = { model: db[parentModel], attributes: [] }
-        include.push(inc)
-      }
-      inc.required = true
-      // use Op.in if parentId is array of ids
-      inc.where = Array.isArray(parentId)
-        ? { id: { [Op.in]: parentId } }
-        : { id: parentId }
-
-      delete where[parentModel]
-    })
+    setSearchQuery(model, where, search, include)
 
     const rows = await db[model].findAll({ attributes, where, limit, offset, order, include })
     return rows.map(row => row.id)
@@ -117,7 +87,7 @@ export const crud = {
       updated: entryIds.map((entryId, index) => [model, [entryId], { order: order[index] }])
     })
   },
-  setMembers: async function ({ model, parentEntryId, memberModel, memberEntryIds }) {
+  setMembers: async function ({ model, entryId, memberModel, memberEntryIds }) {
     const parentModel = db[model]
     const association = parentModel.associations[memberModel]
     const { associationType, foreignKey } = association
@@ -125,13 +95,16 @@ export const crud = {
     if (['BelongsToMany', 'HasMany'].includes(associationType)) {
       const setAccessor = association.accessors.set
       const getAccessor = association.accessors.get
-      const parentEntry = await parentModel.findByPk(parentEntryId)
+      const parentEntry = await parentModel.findByPk(entryId)
 
       if (associationType === 'BelongsToMany') {
         // TODO don't emit if nothing has changed
         const updateMembers = await parentEntry[setAccessor](memberEntryIds)
         changeListener({
-          related: [model, memberModel]
+          related: [
+            [model],
+            [memberModel]
+          ]
         })
         return updateMembers
       } else if (associationType === 'HasMany') {
@@ -143,14 +116,17 @@ export const crud = {
 
         const updateMember = await parentEntry[setAccessor](memberEntryIds)
 
-        // TODO get exact updatedAt from db. updatedAt returned by updateMember is old, not modified
+        // TODO get exact updatedAt from db. updateMember.updatedAt is old, not modified
         const updatedAt = new Date().toISOString()
 
         changeListener({
-          related: [model, memberModel],
+          related: [
+            [model],
+            [memberModel]
+          ],
           updated: [
             [memberModel, removedEntries, { [foreignKey]: null, updatedAt }],
-            [memberModel, addedEntries, { [foreignKey]: parentEntryId, updatedAt }]
+            [memberModel, addedEntries, { [foreignKey]: entryId, updatedAt }]
           ]
         })
         return updateMember
@@ -184,7 +160,7 @@ export const crud = {
             // TODO don't call unless changed
             this.setMembers({
               model,
-              parentEntryId: updatedEntry.id,
+              entryId: updatedEntry.id,
               memberModel,
               memberEntryIds
             })
@@ -212,7 +188,7 @@ export const crud = {
   restore: async function ({ model, entryId }) {
     const objEntry = await db[model].findByPk(entryId, { paranoid: false })
     changeListener({
-      undeleted: [
+      zombies: [
         [model, [entryId]]
       ]
     })
@@ -235,16 +211,19 @@ function getParentModel (strModel, where) {
     })
 }
 
-async function addOrRemoveMember (accessorStr, { model, parentEntryId, memberModel, memberEntryId }) {
+async function addOrRemoveMember (accessorStr, { model, entryId, memberModel, memberEntryId }) {
   const association = db[model].associations[memberModel]
   const { associationType, foreignKey } = association
-  const parentEntry = await db[model].findByPk(parentEntryId)
+  const parentEntry = await db[model].findByPk(entryId)
 
   if (associationType === 'BelongsToMany') {
     const accessor = association.accessors[accessorStr]
     const updatedParent = await parentEntry[accessor](memberEntryId)
     changeListener({
-      related: [model, memberModel]
+      related: [
+        [model],
+        [memberModel]
+      ]
     })
     return updatedParent
   } else if (associationType === 'HasMany') {
@@ -252,9 +231,12 @@ async function addOrRemoveMember (accessorStr, { model, parentEntryId, memberMod
     const updatedParent = await parentEntry[accessor](memberEntryId)
 
     const updatedAt = new Date().toISOString()
-    const change = { [foreignKey]: accessorStr === 'add' ? parentEntryId : null, updatedAt }
+    const change = { [foreignKey]: accessorStr === 'add' ? entryId : null, updatedAt }
     changeListener({
-      related: [model, memberModel],
+      related: [
+        [model],
+        [memberModel]
+      ],
       updated: [
         [memberModel, [memberEntryId], change]
       ]
@@ -264,11 +246,29 @@ async function addOrRemoveMember (accessorStr, { model, parentEntryId, memberMod
   throw new Error(`${model} & ${memberModel} are not in a many-to-many relationship`)
 }
 
-function setSearchQuery (model, where, search) {
-  Object.keys(search)
-    .forEach(field => {
-      where[Op[field] || field] = resolveOpsInSearchQuery(model, search[field])
-    })
+function setSearchQuery (model, where, search, include) {
+  if (search && typeof search === 'object') {
+    Object.keys(search)
+      .forEach(field => {
+        where[Op[field] || field] = resolveOpsInSearchQuery(model, search[field])
+      })
+  }
+  getParentModel(model, where).forEach(parentModel => {
+    const parentId = where[parentModel]
+    // since it might be included by the "order" code above already
+    let inc = include.find(inc => inc.model === db[parentModel])
+    if (!inc) {
+      inc = { model: db[parentModel], attributes: [] }
+      include.push(inc)
+    }
+    inc.required = true
+    // use Op.in if parentId is array of ids
+    inc.where = Array.isArray(parentId)
+      ? { id: { [Op.in]: parentId } }
+      : { id: parentId }
+
+    delete where[parentModel]
+  })
 }
 
 // what could possibly go wrong
