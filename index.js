@@ -42,7 +42,7 @@ export const crud = {
       })
     // TODO prevent duplicate events from calling both setMembers and this
     changeListener({
-      creates: [
+      created: [
         [model, [entryId]]
       ]
     })
