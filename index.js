@@ -178,21 +178,23 @@ export const crud = {
   },
   delete: async function ({ model, entryId }) {
     const objEntry = await db[model].findByPk(entryId)
+    const result = await objEntry.destroy()
     changeListener({
       deleted: [
         [model, [entryId]]
       ]
     })
-    return objEntry.destroy()
+    return result
   },
   restore: async function ({ model, entryId }) {
     const objEntry = await db[model].findByPk(entryId, { paranoid: false })
+    const result = await objEntry.restore()
     changeListener({
       zombies: [
         [model, [entryId]]
       ]
     })
-    return objEntry.restore()
+    return result
   }
 }
 
