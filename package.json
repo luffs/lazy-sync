@@ -1,6 +1,6 @@
 {
-  "name": "@luffs/lazy-sync",
-  "version": "1.0.5",
+  "name": "lazy-sync",
+  "version": "1.0.6",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -13,7 +13,9 @@
     "sequelize": "^5.21.7",
     "standard": "^14.3.3"
   },
-  "publishConfig": {
-    "registry":"https://npm.pkg.github.com/"
+  "homepage": "https://gitlab.com/rb.luff/lazy-sync",
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/rb.luff/lazy-sync.git"
   }
 }
