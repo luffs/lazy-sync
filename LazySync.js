@@ -38,8 +38,8 @@ export const Z = {
     async create ({ model, objValues }) {},
     async addMember ({ model, entryId, memberModel, memberEntryId }) {},
     async removeMember ({ model, entryId, memberModel, memberEntryId }) {},
-    async count ({ model, where = {}, search = {} }) {},
-    async find ({ model, where = {}, limit = undefined, offset = 0, search = {}, order = [] }) {},
+    async count ({ model, search = {} }) {},
+    async find ({ model, search = {}, limit = undefined, offset = 0, order = [] }) {},
     async get ({ model, entryIds = [] }) {},
     async order ({ model, entryIds = [], order = [] }) {},
     async update ({ model, entryId, objValues }) {},
@@ -67,7 +67,6 @@ class LazySync {
       entries: {},
       fetchTimeout: 0,
       options: {
-        search: {},
         order: [],
         limit: undefined,
         offset: 0
@@ -86,21 +85,17 @@ class LazySync {
     return this.entries[id]
   }
 
-  clearCount (where = {}, options) {
-    options = options || this.options
+  clearCount (search = {}) {
     const { model } = this
-    const { search } = options
-    const query = { where, search, model }
+    const query = { search, model }
     const hash = LazySync.hash(JSON.stringify(query))
     delete this.counts[hash]
     delete this.pending.counts[hash]
   }
 
-  count (where = {}, options, snazzyList) {
-    options = options || this.options
+  count (search = {}, snazzyList) {
     const { model } = this
-    const { search } = options
-    const query = { where, search, model }
+    const query = { search, model }
     const hash = LazySync.hash(JSON.stringify(query))
 
     // console.log('get count', model)
@@ -127,11 +122,11 @@ class LazySync {
     return this.cache.counts[hash] || 0
   }
 
-  find (where = {}, options) {
+  find (search = {}, options) {
     options = options || this.options
     const { model } = this
-    const { limit, offset, search, order } = options
-    const query = { where, limit, offset, search, model, order }
+    const { limit, offset, order } = options
+    const query = { search, limit, offset, model, order }
     const hash = LazySync.hash(JSON.stringify(query))
 
     if (!this.results[hash]) {
@@ -331,8 +326,8 @@ class LazyResult {
 
   invalidate () {
     const { model, query } = this
-    const { where, search } = query
-    Z[model].clearCount(where, { search })
+    const { search } = query
+    Z[model].clearCount(search)
 
     Vue.set(this, 'inSync', false)
     Vue.delete(this, 'list')
@@ -351,8 +346,7 @@ class LazyResult {
     Object.defineProperty(this, 'count', {
       configurable: true,
       get: () => {
-        const options = { search }
-        const count = Z[model].count(where, options, this)
+        const count = Z[model].count(search, this)
         delete this.count // delete getter
         Vue.set(this, 'count', count)
         return count
