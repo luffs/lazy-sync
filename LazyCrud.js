@@ -1,7 +1,4 @@
-
-import Sequelize from 'sequelize'
-
-const { Op } = Sequelize
+import Sequelize, { literal, Op, QueryTypes } from 'sequelize'
 
 let db = {}
 let changeListener = ({ created, related, updated, deleted, zombies }) => {}
@@ -48,6 +45,28 @@ export const crud = {
       ]
     })
     return newEntry
+  },
+  bulkFind: async function ({ model, searches = [], limit = undefined, offset = 0, order = [] }) {
+    const bulkSelectQuery = generateBulkSelectQuery(db[model], searches)
+    console.log(bulkSelectQuery)
+
+    const rows = await Sequelize.query(bulkSelectQuery, { type: QueryTypes.SELECT })
+    const results = searches.map(() => [])
+    rows.forEach(({ id, queryId }) => {
+      results[queryId].push(id)
+    })
+    return results
+
+    function generateBulkSelectQuery (Model, searches) {
+      return searches
+        .map(({ where = {}, order = [] }, index) => {
+          const attributes = ['id', literal(index + ' AS queryId')]
+          return Model.QueryGenerator.selectQuery(Model.getTableName(), { where, order, attributes }, Model)
+        })
+        .join(' UNION ')
+      // TODO replace all ORDER BY statements, except the last
+      // .replace(/[.](?=.*[.])/g, "");
+    }
   },
   find: async function ({ model, search = {}, limit = undefined, offset = 0, order = [] }) {
     const attributes = ['id']
