@@ -1,11 +1,13 @@
 import Sequelize, { literal, Op, QueryTypes } from 'sequelize'
 
 let db = {}
+let sequelize = null
 let changeListener = ({ created, related, updated, deleted, zombies }) => {}
 
 export const crud = {
-  init (dbModels, changeCallback) {
+  init (dbInstance, dbModels, changeCallback) {
     db = dbModels
+    sequelize = dbInstance
     changeListener = changeCallback
   },
   addMember: async function ({ model, entryId, memberModel, memberEntryId }) {
@@ -47,26 +49,13 @@ export const crud = {
     return newEntry
   },
   bulkFind: async function ({ model, searches = [], limit = undefined, offset = 0, order = [] }) {
-    const bulkSelectQuery = generateBulkSelectQuery(db[model], searches)
-    console.log(bulkSelectQuery)
-
-    const rows = await Sequelize.query(bulkSelectQuery, { type: QueryTypes.SELECT })
+    const bulkSelectQuery = generateBulkSelectQuery(model, searches, order)
+    const rows = await sequelize.query(bulkSelectQuery, { type: QueryTypes.SELECT })
     const results = searches.map(() => [])
     rows.forEach(({ id, queryId }) => {
       results[queryId].push(id)
     })
     return results
-
-    function generateBulkSelectQuery (Model, searches) {
-      return searches
-        .map(({ where = {}, order = [] }, index) => {
-          const attributes = ['id', literal(index + ' AS queryId')]
-          return Model.QueryGenerator.selectQuery(Model.getTableName(), { where, order, attributes }, Model)
-        })
-        .join(' UNION ')
-      // TODO replace all ORDER BY statements, except the last
-      // .replace(/[.](?=.*[.])/g, "");
-    }
   },
   find: async function ({ model, search = {}, limit = undefined, offset = 0, order = [] }) {
     const attributes = ['id']
@@ -269,12 +258,14 @@ async function addOrRemoveMember (accessorStr, { model, entryId, memberModel, me
   throw new Error(`${model} & ${memberModel} are not in a many-to-many relationship`)
 }
 
-function setSearchQuery (model, where, query, include) {
-  if (query && typeof query === 'object') {
-    Object.keys(query)
-      .forEach(field => {
-        where[Op[field] || field] = resolveOpsInSearchQuery(model, query[field])
-      })
+function setSearchQuery (model, where, search, include) {
+  if (search && typeof search === 'object') {
+    Object.keys(search).forEach(field => {
+      where[Op[field] || field] = resolveOpsInSearchQuery(model, search[field])
+    })
+    for (const symbol of Object.getOwnPropertySymbols(search)) {
+      where[symbol] = resolveOpsInSearchQuery(model, search[symbol])
+    }
   }
   getParentModel(model, where).forEach(parentModel => {
     const parentId = where[parentModel]
@@ -310,4 +301,37 @@ function resolveOpsInSearchQuery (model, search) {
     returnValue = search
   }
   return returnValue
+}
+
+function generateBulkSelectQuery (model, searches, order) {
+  const REGEXP_ORDER_BY = /(ORDER[^;]*);/
+  const REGEXP_SEMICOLON = /;/
+  // replace all ORDER BY statements, except the last
+  // CONST ALL_ORDER_BYS_EXCEPT_LAST = /(ORDER[^;]*);(?=.*[;])/g
+  const Model = db[model]
+  const sqlQueries = searches
+    .map((search, index) => {
+      const attributes = [[Sequelize.literal(String(index)), 'queryId'], 'id']
+      const include = []
+      const where = {}
+      order.forEach(item => {
+        if (typeof item[0] === 'string') {
+          attributes.push(item[0])
+        }
+      })
+      setSearchQuery(model, where, search, include)
+      return Model.QueryGenerator.selectQuery(Model.getTableName(), { where, order, include, attributes }, Model)
+    })
+
+  let orderSql = ''
+  try {
+    orderSql = sqlQueries[0].match(REGEXP_ORDER_BY)[0].replace(/("[^.]*.)/, '')
+  } catch (err) {
+    if (order && order.length > 0) {
+      throw err
+    }
+  }
+  return sqlQueries
+    .map(sqlQuery => sqlQuery.replace(orderSql ? REGEXP_ORDER_BY : REGEXP_SEMICOLON, ''))
+    .join(' UNION ') + orderSql
 }
