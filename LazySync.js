@@ -39,6 +39,7 @@ export const Z = {
     async addMember ({ model, entryId, memberModel, memberEntryId }) {},
     async removeMember ({ model, entryId, memberModel, memberEntryId }) {},
     async count ({ model, search = {} }) {},
+    async bulkFind ({ model, searches = [], limit = undefined, offset = 0, order = [] }) {},
     async find ({ model, search = {}, limit = undefined, offset = 0, order = [] }) {},
     async get ({ model, entryIds = [] }) {},
     async order ({ model, entryIds = [], order = [] }) {},
@@ -61,7 +62,8 @@ class LazySync {
       },
       pending: {
         counts: new Map(),
-        entries: []
+        entries: [],
+        lists: []
       },
       counts: {},
       entries: {},
@@ -135,49 +137,26 @@ class LazySync {
     return this.results[hash]
   }
 
-  refresh (snazzyResult) {
-    const { model, query } = snazzyResult
+  refresh (lazyResult) {
+    const { model, query } = lazyResult
     const { changeIndex } = Z[model]
     const hash = LazySync.hash(JSON.stringify(query))
     // Z[model].changeIndex will be incremented every time the model get invalidated by an event from the server
-    if (snazzyResult.changeIndex !== changeIndex) {
-      snazzyResult.changeIndex = changeIndex
+    if (lazyResult.changeIndex !== changeIndex) {
+      lazyResult.changeIndex = changeIndex
 
       const cachedList = this.cache.lists[hash]
       if (cachedList) {
-        snazzyResult.list.splice(0)
+        lazyResult.list.splice(0)
         cachedList.forEach(id => {
           const entry = Z[model].id(id)
-          snazzyResult.list.push(entry)
+          lazyResult.list.push(entry)
         })
       }
-
-      // console.log('before find', model)
-      Z.methods.find(query)
-        .then(rows => {
-          // is supposed to fix a race condition that happens when find request is initiated, but invalidate() is called before it returns
-          if (Z[model].changeIndex === changeIndex) {
-            console.log('find', model, { query, rows, snazzyResult })
-            this.cache.lists[hash] = rows
-            // this will trigger an update and clear the array
-            // snazzyResult.find = rows.map(id => Z[model].id(id))
-            snazzyResult.list.splice(0)
-            rows.forEach(id => {
-              const entry = Z[model].id(id)
-              snazzyResult.list.push(entry)
-            })
-            // this doesn't trigger an update
-            snazzyResult.inSync = true
-            notifySyncCallbacks(snazzyResult)
-          } else {
-            console.log('Lucky we looked for this race condition, isn\'t it?')
-          }
-        })
-        .catch(error => {
-          console.error('find', error)
-        })
+      this.pending.lists.push(hash)
+      this.fetchLater()
     }
-    return snazzyResult
+    return lazyResult
   }
 
   create (objValues) {
@@ -231,6 +210,11 @@ class LazySync {
   }
 
   fetchPending () {
+    this.fetchPendingEntries()
+    this.fetchPendingLists()
+  }
+
+  fetchPendingEntries () {
     if (this.ready && this.pending.entries.length > 0) {
       const entryIds = this.pending.entries
       const { model } = this
@@ -250,6 +234,54 @@ class LazySync {
         })
       this.pending.entries = []
     }
+  }
+
+  fetchPendingLists () {
+    const { model, changeIndex } = this
+    const similar = {}
+    const pending = this.pending.lists.splice(0)
+
+    pending
+      .forEach(hash => {
+        const { query } = this.results[hash]
+        const { order, limit, offset } = query
+        const orderHash = LazySync.hash(JSON.stringify({ order, limit, offset }))
+        similar[orderHash] = similar[orderHash] || []
+        similar[orderHash].push(query)
+      })
+
+    Object.keys(similar)
+      .forEach(orderHash => {
+        const queryGroup = similar[orderHash]
+        const { order, limit, offset } = queryGroup[0]
+        const searches = queryGroup.map(query => query.search)
+        console.log('bulkFind', model, { queryGroup, searches })
+
+        Z.methods.bulkFind({ model, searches, limit, offset, order })
+          .then(rowsOfRows => {
+            // is supposed to fix a race condition that happens when find request is initiated, but invalidate() is called before it returns
+            if (Z[model].changeIndex === changeIndex) {
+              console.log('found', model, { queryGroup, rowsOfRows })
+              rowsOfRows.forEach((rows, index) => {
+                const hash = pending[index]
+                const lazyResult = this.results[hash]
+                this.cache.lists[hash] = rows
+                // this will trigger an update and clear the array
+                // snazzyResult.find = rows.map(id => Z[model].id(id))
+                lazyResult.list.splice(0)
+                rows.forEach(id => {
+                  const entry = Z[model].id(id)
+                  lazyResult.list.push(entry)
+                })
+                // this doesn't trigger an update
+                lazyResult.inSync = true
+                notifySyncCallbacks(lazyResult)
+              })
+            } else {
+              console.log('Lucky we looked for this race condition, isn\'t it?')
+            }
+          })
+      })
   }
 
   invalidate () {
