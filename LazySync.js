@@ -244,8 +244,8 @@ class LazySync {
     pending
       .forEach(hash => {
         const { query } = this.results[hash]
-        const { order, limit, offset } = query
-        const orderHash = LazySync.hash(JSON.stringify({ order, limit, offset }))
+        const { search, order, limit, offset } = query
+        const orderHash = LazySync.hash(JSON.stringify({ order, limit, offset, search: Object.keys(search) }))
         similar[orderHash] = similar[orderHash] || []
         similar[orderHash].push(query)
       })

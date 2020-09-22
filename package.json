@@ -10,7 +10,7 @@
   "license": "ISC",
   "devDependencies": {
     "eslint": "^6.8.0",
-    "sequelize": "^5.21.7",
+    "sequelize": "^5.22.3",
     "standard": "^14.3.3"
   },
   "eslintConfig": {
@@ -28,5 +28,8 @@
   "repository": {
     "type": "git",
     "url": "https://gitlab.com/rb.luff/lazy-sync.git"
+  },
+  "dependencies": {
+    "lodash": "^4.17.20"
   }
 }

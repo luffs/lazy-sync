@@ -1,8 +1,11 @@
-import Sequelize, { literal, Op, QueryTypes } from 'sequelize'
+import Sequelize, { Op, QueryTypes } from 'sequelize'
+import Utils from 'sequelize/lib/utils.js'
+
+// TODO order bulkFind... maybe replace it with manually written sql
 
 let db = {}
 let sequelize = null
-let changeListener = ({ created, related, updated, deleted, zombies }) => {}
+let changeListener = (session, { created, related, updated, deleted, zombies }) => {}
 
 export const crud = {
   init (dbInstance, dbModels, changeCallback) {
@@ -10,19 +13,19 @@ export const crud = {
     sequelize = dbInstance
     changeListener = changeCallback
   },
-  addMember: async function ({ model, entryId, memberModel, memberEntryId }) {
-    return addOrRemoveMember('add', { model, entryId, memberModel, memberEntryId })
+  addMember: async function (session, { model, entryId, memberModel, memberEntryId }) {
+    return addOrRemoveMember(session, 'add', { model, entryId, memberModel, memberEntryId })
   },
-  removeMember: async function ({ model, entryId, memberModel, memberEntryId }) {
-    return addOrRemoveMember('remove', { model, entryId, memberModel, memberEntryId })
+  removeMember: async function (session, { model, entryId, memberModel, memberEntryId }) {
+    return addOrRemoveMember(session, 'remove', { model, entryId, memberModel, memberEntryId })
   },
-  count: async function ({ model, search = {} }) {
+  count: async function (session, { model, search = {} }) {
     const include = []
     const where = {}
     setSearchQuery(model, where, search, include)
     return db[model].count({ where, include })
   },
-  create: async function ({ model, objValues }) {
+  create: async function (session, { model, objValues }) {
     const newEntry = await db[model].create(objValues)
     const entryId = newEntry.id
     Object.keys(objValues)
@@ -41,15 +44,15 @@ export const crud = {
         }
       })
     // TODO prevent duplicate events from calling both setMembers and this
-    changeListener({
+    changeListener(session, {
       created: [
         [model, [entryId]]
       ]
     })
     return newEntry
   },
-  bulkFind: async function ({ model, searches = [], limit = undefined, offset = 0, order = [] }) {
-    const bulkSelectQuery = generateBulkSelectQuery(model, searches, order)
+  bulkFind: async function (session, { model, searches = [], limit = undefined, offset = 0, order = [] }) {
+    const bulkSelectQuery = generateBulkSelectQuery({ model, searches, limit, offset, order, raw: true })
     const rows = await sequelize.query(bulkSelectQuery, { type: QueryTypes.SELECT })
     const results = searches.map(() => [])
     rows.forEach(({ id, queryId }) => {
@@ -57,7 +60,7 @@ export const crud = {
     })
     return results
   },
-  find: async function ({ model, search = {}, limit = undefined, offset = 0, order = [] }) {
+  find: async function (session, { model, search = {}, limit = undefined, offset = 0, order = [] }) {
     const attributes = ['id']
     const include = []
     const where = {}
@@ -82,22 +85,22 @@ export const crud = {
     const rows = await db[model].findAll({ attributes, where, limit, offset, order, include })
     return rows.map(row => row.id)
   },
-  get: async function ({ model, entryIds = [] }) {
+  get: async function (session, { model, entryIds = [] }) {
     const where = { id: entryIds }
     return db[model].findAll({ where })
   },
-  order: async function ({ model, entryIds = [], order = [] }) {
+  order: async function (session, { model, entryIds = [], order = [] }) {
     // TODO validate array of ids and has access...
     await Promise.all(
       entryIds.map((id, index) => {
         return db[model].update({ order: order[index] }, { where: { id } })
       })
     )
-    changeListener({
+    changeListener(session, {
       updated: entryIds.map((entryId, index) => [model, [entryId], { order: order[index] }])
     })
   },
-  setMembers: async function ({ model, entryId, memberModel, memberEntryIds }) {
+  setMembers: async function (session, { model, entryId, memberModel, memberEntryIds }) {
     const parentModel = db[model]
     const association = parentModel.associations[memberModel]
     const { associationType, foreignKey } = association
@@ -110,7 +113,7 @@ export const crud = {
       if (associationType === 'BelongsToMany') {
         // TODO don't emit if nothing has changed
         const updateMembers = await parentEntry[setAccessor](memberEntryIds)
-        changeListener({
+        changeListener(session, {
           related: [
             [model],
             [memberModel]
@@ -129,7 +132,7 @@ export const crud = {
         // TODO get exact updatedAt from db. updateMember.updatedAt is old, not modified
         const updatedAt = new Date().toISOString()
 
-        changeListener({
+        changeListener(session, {
           related: [
             [model],
             [memberModel]
@@ -145,7 +148,7 @@ export const crud = {
       throw new Error(`${model} & ${memberModel} are not related`)
     }
   },
-  update: async function ({ model, entryId, objValues }) {
+  update: async function (session, { model, entryId, objValues }) {
     const objEntry = await db[model].findByPk(entryId)
 
     // Don't allow changing relation by setting parent Id directly (ex. use MediaFolders instead of MediaFolderId)
@@ -178,7 +181,7 @@ export const crud = {
         }
       })
     if (Object.keys(changed).length > 0) {
-      changeListener({
+      changeListener(session, {
         updated: [
           [model, [entryId], changed]
         ]
@@ -186,20 +189,20 @@ export const crud = {
     }
     return updatedEntry
   },
-  delete: async function ({ model, entryId }) {
+  delete: async function (session, { model, entryId }) {
     const objEntry = await db[model].findByPk(entryId)
     const result = await objEntry.destroy()
-    changeListener({
+    changeListener(session, {
       deleted: [
         [model, [entryId]]
       ]
     })
     return result
   },
-  restore: async function ({ model, entryId }) {
+  restore: async function (session, { model, entryId }) {
     const objEntry = await db[model].findByPk(entryId, { paranoid: false })
     const result = await objEntry.restore()
-    changeListener({
+    changeListener(session, {
       zombies: [
         [model, [entryId]]
       ]
@@ -223,7 +226,7 @@ function getParentModel (strModel, where) {
     })
 }
 
-async function addOrRemoveMember (accessorStr, { model, entryId, memberModel, memberEntryId }) {
+async function addOrRemoveMember (session, accessorStr, { model, entryId, memberModel, memberEntryId }) {
   const association = db[model].associations[memberModel]
   const { associationType, foreignKey } = association
   const parentEntry = await db[model].findByPk(entryId)
@@ -231,7 +234,7 @@ async function addOrRemoveMember (accessorStr, { model, entryId, memberModel, me
   if (associationType === 'BelongsToMany') {
     const accessor = association.accessors[accessorStr]
     const updatedParent = await parentEntry[accessor](memberEntryId)
-    changeListener({
+    changeListener(session, {
       related: [
         [model],
         [memberModel]
@@ -244,7 +247,7 @@ async function addOrRemoveMember (accessorStr, { model, entryId, memberModel, me
 
     const updatedAt = new Date().toISOString()
     const change = { [foreignKey]: accessorStr === 'add' ? entryId : null, updatedAt }
-    changeListener({
+    changeListener(session, {
       related: [
         [model],
         [memberModel]
@@ -258,7 +261,7 @@ async function addOrRemoveMember (accessorStr, { model, entryId, memberModel, me
   throw new Error(`${model} & ${memberModel} are not in a many-to-many relationship`)
 }
 
-function setSearchQuery (model, where, search, include) {
+function setSearchQuery (model, where, search, include, queryId = 0) {
   if (search && typeof search === 'object') {
     Object.keys(search).forEach(field => {
       where[Op[field] || field] = resolveOpsInSearchQuery(model, search[field])
@@ -268,11 +271,11 @@ function setSearchQuery (model, where, search, include) {
     }
   }
   getParentModel(model, where).forEach(parentModel => {
-    const parentId = where[parentModel]
+    const parentId = search[parentModel]
     // since it might be included by the "order" code above already
     let inc = include.find(inc => inc.model === db[parentModel])
     if (!inc) {
-      inc = { model: db[parentModel], attributes: [] }
+      inc = { model: db[parentModel], attributes: ['id'] }
       include.push(inc)
     }
     inc.required = true
@@ -303,15 +306,15 @@ function resolveOpsInSearchQuery (model, search) {
   return returnValue
 }
 
-function generateBulkSelectQuery (model, searches, order) {
+function generateBulkSelectQuery ({ model, searches, order, limit, offset }) {
   const REGEXP_ORDER_BY = /(ORDER[^;]*);/
   const REGEXP_SEMICOLON = /;/
   // replace all ORDER BY statements, except the last
   // CONST ALL_ORDER_BYS_EXCEPT_LAST = /(ORDER[^;]*);(?=.*[;])/g
   const Model = db[model]
   const sqlQueries = searches
-    .map((search, index) => {
-      const attributes = [[Sequelize.literal(String(index)), 'queryId'], 'id']
+    .map((search, queryId) => {
+      const attributes = [[Sequelize.literal(String(queryId)), 'queryId'], 'id']
       const include = []
       const where = {}
       order.forEach(item => {
@@ -319,8 +322,8 @@ function generateBulkSelectQuery (model, searches, order) {
           attributes.push(item[0])
         }
       })
-      setSearchQuery(model, where, search, include)
-      return Model.QueryGenerator.selectQuery(Model.getTableName(), { where, order, include, attributes }, Model)
+      setSearchQuery(model, where, search, include, queryId)
+      return generateSelectQuery.call(Model, { where, order, limit, offset, include, attributes })
     })
 
   let orderSql = ''
@@ -332,6 +335,63 @@ function generateBulkSelectQuery (model, searches, order) {
     }
   }
   return sqlQueries
-    .map(sqlQuery => sqlQuery.replace(orderSql ? REGEXP_ORDER_BY : REGEXP_SEMICOLON, ''))
+    .map((sqlQuery, queryId) => {
+      return sqlQuery
+        // .replace('SELECT', `SELECT ${queryId} AS \`queryId\`,`)
+        .replace(orderSql ? REGEXP_ORDER_BY : REGEXP_SEMICOLON, '')
+    })
     .join(' UNION ') + orderSql
+}
+
+function generateSelectQuery (options) {
+  this.warnOnInvalidOptions(options, Object.keys(this.rawAttributes))
+
+  const tableNames = {}
+
+  tableNames[this.getTableName(options)] = true
+  options = Utils.cloneDeep(options)
+
+  // set rejectOnEmpty option, defaults to model options
+  options.rejectOnEmpty = Object.prototype.hasOwnProperty.call(options, 'rejectOnEmpty')
+    ? options.rejectOnEmpty
+    : this.options.rejectOnEmpty
+
+  this._injectScope(options)
+  this._conformIncludes(options, this)
+  this._expandAttributes(options)
+  this._expandIncludeAll(options)
+
+  options.originalAttributes = this._injectDependentVirtualAttributes(options.attributes)
+
+  if (options.include) {
+    options.hasJoin = true
+
+    this._validateIncludedElements(options, tableNames)
+
+    // If we're not raw, we have to make sure we include the primary key for de-duplication
+    if (
+      options.attributes &&
+      !options.raw &&
+      this.primaryKeyAttribute &&
+      !options.attributes.includes(this.primaryKeyAttribute) &&
+      (!options.group || !options.hasSingleAssociation || options.hasMultiAssociation)
+    ) {
+      options.attributes = [this.primaryKeyAttribute].concat(options.attributes)
+    }
+  }
+
+  if (!options.attributes) {
+    options.attributes = Object.keys(this.rawAttributes)
+    options.originalAttributes = this._injectDependentVirtualAttributes(options.attributes)
+  }
+
+  // whereCollection is used for non-primary key updates
+  this.options.whereCollection = options.where || null
+
+  Utils.mapFinderOptions(options, this)
+
+  options = this._paranoidClause(this, options)
+  const selectOptions = Object.assign({}, options, { tableNames: Object.keys(tableNames) })
+  return this.QueryGenerator.selectQuery(this.getTableName(selectOptions), selectOptions, this)
+  // return this.QueryInterface.select(this, this.getTableName(selectOptions), selectOptions)
 }
