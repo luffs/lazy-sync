@@ -242,34 +242,43 @@ class LazySync {
     const pending = this.pending.lists.splice(0)
 
     pending
-      .forEach(hash => {
+      .forEach((hash, index) => {
         const { query } = this.results[hash]
         const { search, order, limit, offset } = query
-        const orderHash = LazySync.hash(JSON.stringify({ order, limit, offset, search: Object.keys(search) }))
-        similar[orderHash] = similar[orderHash] || []
-        similar[orderHash].push(query)
+        const similarHash = LazySync.hash(
+          JSON.stringify({
+            order,
+            limit,
+            offset,
+            search: Object.keys(search),
+            max: Math.floor(index / 50)
+          })
+        )
+        similar[similarHash] = similar[similarHash] || []
+        similar[similarHash].push(hash)
       })
 
     Object.keys(similar)
-      .forEach(orderHash => {
-        const queryGroup = similar[orderHash]
-        const { order, limit, offset } = queryGroup[0]
-        const searches = queryGroup.map(query => query.search)
-        console.log('bulkFind', model, { queryGroup, searches })
+      .forEach(similarHash => {
+        const hashes = similar[similarHash]
+        const queries = hashes.map(hash => this.results[hash].query)
+        const { order, limit, offset } = queries[0]
+        const searches = queries.map(query => query.search)
+        console.log('bulkFind', model, { queries, searches })
 
         Z.methods.bulkFind({ model, searches, limit, offset, order })
-          .then(rowsOfRows => {
+          .then(arrayOfLists => {
             // is supposed to fix a race condition that happens when find request is initiated, but invalidate() is called before it returns
             if (Z[model].changeIndex === changeIndex) {
-              console.log('found', model, { queryGroup, rowsOfRows })
-              rowsOfRows.forEach((rows, index) => {
-                const hash = pending[index]
+              console.log('found', model, { queries, arrayOfLists })
+
+              arrayOfLists.forEach((list, index) => {
+                const hash = hashes[index]
                 const lazyResult = this.results[hash]
-                this.cache.lists[hash] = rows
+                this.cache.lists[hash] = list
                 // this will trigger an update and clear the array
-                // snazzyResult.find = rows.map(id => Z[model].id(id))
                 lazyResult.list.splice(0)
-                rows.forEach(id => {
+                list.forEach(id => {
                   const entry = Z[model].id(id)
                   lazyResult.list.push(entry)
                 })

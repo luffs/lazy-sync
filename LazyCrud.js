@@ -52,7 +52,7 @@ export const crud = {
     return newEntry
   },
   bulkFind: async function (session, { model, searches = [], limit = undefined, offset = 0, order = [] }) {
-    const bulkSelectQuery = generateBulkSelectQuery({ model, searches, limit, offset, order, raw: true })
+    const bulkSelectQuery = generateBulkSelectQuery({ model, searches, limit, offset, order })
     const rows = await sequelize.query(bulkSelectQuery, { type: QueryTypes.SELECT })
     const results = searches.map(() => [])
     rows.forEach(({ id, queryId }) => {
@@ -307,40 +307,37 @@ function resolveOpsInSearchQuery (model, search) {
 }
 
 function generateBulkSelectQuery ({ model, searches, order, limit, offset }) {
-  const REGEXP_ORDER_BY = /(ORDER[^;]*);/
-  const REGEXP_SEMICOLON = /;/
-  // replace all ORDER BY statements, except the last
-  // CONST ALL_ORDER_BYS_EXCEPT_LAST = /(ORDER[^;]*);(?=.*[;])/g
+
+  const include = []
+  // order by name by default, if model has name field
+  if (!Array.isArray(order) || order.length === 0) {
+    order = db[model].rawAttributes.name ? ['name'] : []
+  } else if (Array.isArray(order[0])) {
+    // 'Locations' to db.Locations etc
+    const orderFirstArgument = order[0][0]
+    if (db[orderFirstArgument]) {
+      order[0][0] = db[orderFirstArgument]
+      include.push({
+        model: db[orderFirstArgument],
+        attributes: []
+      })
+    }
+  }
+
   const Model = db[model]
   const sqlQueries = searches
     .map((search, queryId) => {
       const attributes = [[Sequelize.literal(String(queryId)), 'queryId'], 'id']
-      const include = []
       const where = {}
-      order.forEach(item => {
-        if (typeof item[0] === 'string') {
-          attributes.push(item[0])
-        }
-      })
       setSearchQuery(model, where, search, include, queryId)
       return generateSelectQuery.call(Model, { where, order, limit, offset, include, attributes })
     })
 
-  let orderSql = ''
-  try {
-    orderSql = sqlQueries[0].match(REGEXP_ORDER_BY)[0].replace(/("[^.]*.)/, '')
-  } catch (err) {
-    if (order && order.length > 0) {
-      throw err
-    }
-  }
   return sqlQueries
-    .map((sqlQuery, queryId) => {
-      return sqlQuery
-        // .replace('SELECT', `SELECT ${queryId} AS \`queryId\`,`)
-        .replace(orderSql ? REGEXP_ORDER_BY : REGEXP_SEMICOLON, '')
+    .map(sqlQuery => {
+      return `(${sqlQuery.replace(';', '')})`
     })
-    .join(' UNION ') + orderSql
+    .join(' UNION ')
 }
 
 function generateSelectQuery (options) {
@@ -393,5 +390,4 @@ function generateSelectQuery (options) {
   options = this._paranoidClause(this, options)
   const selectOptions = Object.assign({}, options, { tableNames: Object.keys(tableNames) })
   return this.QueryGenerator.selectQuery(this.getTableName(selectOptions), selectOptions, this)
-  // return this.QueryInterface.select(this, this.getTableName(selectOptions), selectOptions)
 }
