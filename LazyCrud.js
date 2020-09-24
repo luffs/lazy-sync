@@ -1,4 +1,4 @@
-import Sequelize, { Op, QueryTypes } from 'sequelize'
+import Sequelize, { col, fn, literal, Op, QueryTypes } from 'sequelize'
 import Utils from 'sequelize/lib/utils.js'
 
 // TODO order bulkFind... maybe replace it with manually written sql
@@ -50,6 +50,15 @@ export const crud = {
       ]
     })
     return newEntry
+  },
+  bulkCount: async function (session, { model, searches = [] }) {
+    const bulkSelectQuery = generateBulkSelectQuery({ model, searches }, true)
+    const rows = await sequelize.query(bulkSelectQuery, { type: QueryTypes.SELECT })
+    const results = searches.map(() => 0)
+    rows.forEach(({ queryId, found }) => {
+      results[queryId] = found
+    })
+    return results
   },
   bulkFind: async function (session, { model, searches = [], limit = undefined, offset = 0, order = [] }) {
     const bulkSelectQuery = generateBulkSelectQuery({ model, searches, limit, offset, order })
@@ -306,36 +315,39 @@ function resolveOpsInSearchQuery (model, search) {
   return returnValue
 }
 
-function generateBulkSelectQuery ({ model, searches, order, limit, offset }) {
-
+function generateBulkSelectQuery ({ model, searches, order, limit, offset }, isCount = false) {
   const include = []
-  // order by name by default, if model has name field
-  if (!Array.isArray(order) || order.length === 0) {
-    order = db[model].rawAttributes.name ? ['name'] : []
-  } else if (Array.isArray(order[0])) {
-    // 'Locations' to db.Locations etc
-    const orderFirstArgument = order[0][0]
-    if (db[orderFirstArgument]) {
-      order[0][0] = db[orderFirstArgument]
-      include.push({
-        model: db[orderFirstArgument],
-        attributes: []
-      })
+
+  if (!isCount) {
+    // order by name by default, if model has name field
+    if (!Array.isArray(order) || order.length === 0) {
+      order = db[model].rawAttributes.name ? ['name'] : []
+    } else if (Array.isArray(order[0])) {
+      // 'Locations' to db.Locations etc
+      const orderFirstArgument = order[0][0]
+      if (db[orderFirstArgument]) {
+        order[0][0] = db[orderFirstArgument]
+        include.push({
+          model: db[orderFirstArgument],
+          attributes: []
+        })
+      }
     }
   }
 
   const Model = db[model]
   const sqlQueries = searches
     .map((search, queryId) => {
-      const attributes = [[Sequelize.literal(String(queryId)), 'queryId'], 'id']
+      const attributes = [[literal(String(queryId)), 'queryId'], isCount ? [fn('COUNT', col('*')), 'found'] : 'id']
       const where = {}
       setSearchQuery(model, where, search, include, queryId)
-      return generateSelectQuery.call(Model, { where, order, limit, offset, include, attributes })
+      return generateSelectQuery.call(Model, { where, order, limit, offset, include, attributes, distinct: isCount })
     })
 
   return sqlQueries
     .map(sqlQuery => {
-      return `(${sqlQuery.replace(';', '')})`
+      // remove last semicolon and wrap in parentheses
+      return `(${sqlQuery.slice(0, -1)})`
     })
     .join(' UNION ')
 }

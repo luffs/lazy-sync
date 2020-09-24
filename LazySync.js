@@ -39,6 +39,7 @@ export const Z = {
     async addMember ({ model, entryId, memberModel, memberEntryId }) {},
     async removeMember ({ model, entryId, memberModel, memberEntryId }) {},
     async count ({ model, search = {} }) {},
+    async bulkCount ({ model, searches = [] }) {},
     async bulkFind ({ model, searches = [], limit = undefined, offset = 0, order = [] }) {},
     async find ({ model, search = {}, limit = undefined, offset = 0, order = [] }) {},
     async get ({ model, entryIds = [] }) {},
@@ -65,9 +66,16 @@ class LazySync {
         entries: [],
         lists: []
       },
+      fetching: {
+        counts: new Map()
+      },
       counts: {},
       entries: {},
-      fetchTimeout: 0,
+      timeouts: {
+        entries: 0,
+        lists: 0,
+        counts: 0
+      },
       options: {
         order: [],
         limit: undefined,
@@ -82,7 +90,7 @@ class LazySync {
     if (!this.entries[id]) {
       this.entries[id] = new LazyEntry(id, this.changeIndex)
       this.pending.entries.push(id)
-      this.fetchLater()
+      this.fetchEntriesLater()
     }
     return this.entries[id]
   }
@@ -95,7 +103,7 @@ class LazySync {
     delete this.pending.counts[hash]
   }
 
-  count (search = {}, snazzyList) {
+  count (search = {}, lazyList) {
     const { model } = this
     const query = { search, model }
     const hash = LazySync.hash(JSON.stringify(query))
@@ -103,22 +111,14 @@ class LazySync {
     // console.log('get count', model)
     if (typeof this.counts[hash] === 'number') {
       return this.counts[hash]
-    } else if (snazzyList) {
+    } else if (lazyList) {
       if (this.pending.counts.has(hash)) {
-        this.pending.counts.get(hash).add(snazzyList)
+        this.pending.counts.get(hash).add(lazyList)
       } else {
-        const countHolders = new Set([snazzyList])
+        const countHolders = new Set([lazyList])
         this.pending.counts.set(hash, countHolders)
 
-        Z.methods.count(query)
-          .then(count => {
-            console.log('count', this.model, { count, hash })
-            this.counts[hash] = this.cache.counts[hash] = count || 0
-            this.notifyCountHolders(hash, count)
-          })
-          .catch(error => {
-            console.error('count error', { model, query, error })
-          })
+        this.fetchCountsLater()
       }
     }
     return this.cache.counts[hash] || 0
@@ -154,7 +154,7 @@ class LazySync {
         })
       }
       this.pending.lists.push(hash)
-      this.fetchLater()
+      this.fetchListsLater()
     }
     return lazyResult
   }
@@ -204,18 +204,73 @@ class LazySync {
     })
   }
 
-  fetchLater () {
-    clearTimeout(this.fetchTimeout)
-    this.fetchTimeout = setTimeout(this.fetchPending.bind(this), 1)
+  fetchEntriesLater () {
+    const { ready, timeouts, fetchPendingEntries, fetchEntriesLater } = this
+    clearTimeout(timeouts.entries)
+    const handler = ready ? fetchPendingEntries : fetchEntriesLater
+    const delay = ready ? 1 : 50
+    timeouts.entries = setTimeout(handler.bind(this), delay)
   }
 
-  fetchPending () {
-    this.fetchPendingEntries()
-    this.fetchPendingLists()
+  fetchListsLater () {
+    const { ready, timeouts, fetchPendingLists, fetchListsLater } = this
+    clearTimeout(timeouts.lists)
+    const handler = ready ? fetchPendingLists : fetchListsLater
+    const delay = ready ? 1 : 50
+    timeouts.lists = setTimeout(handler.bind(this), delay)
+  }
+
+  fetchCountsLater () {
+    const { ready, timeouts, fetchPendingCounts, fetchCountsLater } = this
+    clearTimeout(timeouts.counts)
+    const handler = ready ? fetchPendingCounts : fetchCountsLater
+    const delay = ready ? 1 : 50
+    timeouts.counts = setTimeout(handler.bind(this), delay)
+  }
+
+  fetchPendingCounts () {
+    const { model } = this
+    const hashes =
+      Array.from(this.pending.counts.keys())
+        .filter(hash => !this.fetching.counts.has(hash))
+
+    const searches = []
+    hashes
+      .forEach(hash => {
+        const [lazyResult] = this.pending.counts.get(hash)
+        this.fetching.counts.set(hash, true)
+        searches.push(lazyResult.query.search)
+      })
+
+    if (searches.length === 0) {
+      console.log('nothing to count', model)
+      return
+    }
+    console.log('before count', model, searches)
+    Z.methods.bulkCount({ model, searches })
+      .then(results => {
+        console.log('bulkCount results', results)
+        results
+          .forEach((count, index) => {
+            const hash = hashes[index]
+            this.counts[hash] = this.cache.counts[hash] = count || 0
+            this.fetching.counts.delete(hash)
+            if (this.pending.counts.has(hash)) {
+              const lazyLists = this.pending.counts.get(hash)
+              this.pending.counts.delete(hash)
+              lazyLists.forEach(sL => {
+                Vue.set(sL, 'count', count)
+              })
+            }
+          })
+      })
+      .catch(error => {
+        console.error('count error', { model, searches, error })
+      })
   }
 
   fetchPendingEntries () {
-    if (this.ready && this.pending.entries.length > 0) {
+    if (this.pending.entries.length > 0) {
       const entryIds = this.pending.entries
       const { model } = this
       Z.methods.get({ model, entryIds })
@@ -297,8 +352,8 @@ class LazySync {
     this.changeIndex++
     this.pending.counts = new Map()
     this.counts = {}
-    for (const snazzyResult of Object.values(this.results)) {
-      snazzyResult.invalidate()
+    for (const lazyResult of Object.values(this.results)) {
+      lazyResult.invalidate()
     }
   }
 
@@ -306,23 +361,13 @@ class LazySync {
     const updatedFields = Object.keys(change)
     this.changeIndex++
     updatedFields.forEach(field => {
-      for (const snazzyResult of Object.values(this.results)) {
-        const mightBeModified = JSON.stringify(snazzyResult.query).indexOf(field) !== -1
+      for (const lazyResult of Object.values(this.results)) {
+        const mightBeModified = JSON.stringify(lazyResult.query).indexOf(field) !== -1
         if (mightBeModified) {
-          snazzyResult.invalidate()
+          lazyResult.invalidate()
         }
       }
     })
-  }
-
-  notifyCountHolders (hash, count) {
-    if (this.pending.counts.has(hash)) {
-      const snazzyLists = this.pending.counts.get(hash)
-      this.pending.counts.delete(hash)
-      snazzyLists.forEach(sL => {
-        Vue.set(sL, 'count', count)
-      })
-    }
   }
 
   static hash (str) {
