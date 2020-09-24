@@ -34,7 +34,7 @@ export const crud = {
         if (association) {
           if (['BelongsToMany', 'HasMany'].includes(association.associationType)) {
             const memberEntryIds = objValues[memberModel]
-            this.setMembers({
+            this.setMembers(session, {
               model,
               entryId,
               memberModel,
@@ -171,7 +171,7 @@ export const crud = {
           if (['BelongsToMany', 'HasMany'].includes(association.associationType)) {
             const memberEntryIds = objValues[memberModel]
             // TODO don't call unless changed
-            this.setMembers({
+            this.setMembers(session, {
               model,
               entryId: updatedEntry.id,
               memberModel,
