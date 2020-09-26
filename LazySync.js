@@ -56,6 +56,7 @@ class LazySync {
       model,
       ready: false,
       changeIndex: 1,
+      maxQueriesPerRequest: 50,
       cache: {
         counts: {},
         entries: {},
@@ -71,89 +72,88 @@ class LazySync {
       },
       counts: {},
       entries: {},
+      lazyResults: {},
       timeouts: {
         entries: 0,
         lists: 0,
         counts: 0
-      },
-      options: {
-        order: [],
-        limit: undefined,
-        offset: 0
-      },
-      results: {}
+      }
     })
   }
 
   id (id) {
+    const { changeIndex, entries, pending } = this
     id = parseInt(id, 10)
-    if (!this.entries[id]) {
-      this.entries[id] = new LazyEntry(id, this.changeIndex)
-      this.pending.entries.push(id)
+    if (!entries[id]) {
+      entries[id] = new LazyEntry(id, changeIndex)
+      pending.entries.push(id)
       this.fetchEntriesLater()
     }
-    return this.entries[id]
+    return entries[id]
   }
 
   clearCount (search = {}) {
-    const { model } = this
-    const query = { search, model }
+    const { model, counts, pending } = this
+    const query = { model, search }
     const hash = LazySync.hash(JSON.stringify(query))
-    delete this.counts[hash]
-    delete this.pending.counts[hash]
+    delete counts[hash]
+    delete pending.counts[hash]
   }
 
   count (search = {}, lazyList) {
-    const { model } = this
-    const query = { search, model }
+    const { model, cache, counts, pending } = this
+    const query = { model, search }
     const hash = LazySync.hash(JSON.stringify(query))
 
     // console.log('get count', model)
-    if (typeof this.counts[hash] === 'number') {
-      return this.counts[hash]
+    if (typeof counts[hash] === 'number') {
+      return counts[hash]
     } else if (lazyList) {
-      if (this.pending.counts.has(hash)) {
-        this.pending.counts.get(hash).add(lazyList)
+      if (pending.counts.has(hash)) {
+        pending.counts.get(hash).add(lazyList)
       } else {
         const countHolders = new Set([lazyList])
-        this.pending.counts.set(hash, countHolders)
+        pending.counts.set(hash, countHolders)
 
         this.fetchCountsLater()
       }
     }
-    return this.cache.counts[hash] || 0
+    return cache.counts[hash] || 0
   }
 
-  find (search = {}, options) {
-    options = options || this.options
-    const { model } = this
+  find (search = {}, options = {}) {
+    const { model, lazyResults } = this
+    const query = { search }
     const { limit, offset, order } = options
-    const query = { search, limit, offset, model, order }
+    options = { limit, offset, order }
+    for (const key in options) {
+      if (options[key]) {
+        query[key] = options[key]
+      }
+    }
     const hash = LazySync.hash(JSON.stringify(query))
 
-    if (!this.results[hash]) {
-      this.results[hash] = new LazyResult(this.model, query)
+    if (!lazyResults[hash]) {
+      lazyResults[hash] = new LazyResult(model, query)
     }
-    return this.results[hash]
+    return lazyResults[hash]
   }
 
   refresh (lazyResult) {
-    const { model, query } = lazyResult
-    const { changeIndex } = Z[model]
+    const { model, cache, pending } = this
+    const { query } = lazyResult
     const hash = LazySync.hash(JSON.stringify(query))
     // Z[model].changeIndex will be incremented every time the model get invalidated by an event from the server
-    if (lazyResult.changeIndex !== changeIndex) {
-      lazyResult.changeIndex = changeIndex
+    if (lazyResult.changeIndex !== this.changeIndex) {
+      lazyResult.changeIndex = this.changeIndex
 
-      const cachedList = this.cache.lists[hash]
+      const cachedList = cache.lists[hash]
       if (cachedList) {
+        const entries = cachedList.map(id => Z[model].id(id))
         lazyResult.list.splice(0)
-        cachedList.forEach(id => {
-          const entry = Z[model].id(id)
-          lazyResult.list.push(entry)
-        })
+        lazyResult.list.push(...entries)
       }
-      this.pending.lists.push(hash)
+      pending.lists.push(hash)
       this.fetchListsLater()
     }
     return lazyResult
@@ -229,16 +229,16 @@ class LazySync {
   }
 
   fetchPendingCounts () {
-    const { model } = this
+    const { model, pending, fetching, cache } = this
     const hashes =
-      Array.from(this.pending.counts.keys())
-        .filter(hash => !this.fetching.counts.has(hash))
+      Array.from(pending.counts.keys())
+        .filter(hash => !fetching.counts.has(hash))
 
     const searches = []
     hashes
       .forEach(hash => {
-        const [lazyResult] = this.pending.counts.get(hash)
-        this.fetching.counts.set(hash, true)
+        const [lazyResult] = pending.counts.get(hash)
+        fetching.counts.set(hash, true)
         searches.push(lazyResult.query.search)
       })
 
@@ -248,16 +248,16 @@ class LazySync {
     }
     console.log('before count', model, searches)
     Z.methods.bulkCount({ model, searches })
-      .then(results => {
-        console.log('bulkCount results', results)
-        results
+      .then(counts => {
+        console.log('bulkCount results', counts)
+        counts
           .forEach((count, index) => {
             const hash = hashes[index]
-            this.counts[hash] = this.cache.counts[hash] = count || 0
-            this.fetching.counts.delete(hash)
-            if (this.pending.counts.has(hash)) {
-              const lazyLists = this.pending.counts.get(hash)
-              this.pending.counts.delete(hash)
+            counts[hash] = cache.counts[hash] = count || 0
+            fetching.counts.delete(hash)
+            if (pending.counts.has(hash)) {
+              const lazyLists = pending.counts.get(hash)
+              pending.counts.delete(hash)
               lazyLists.forEach(sL => {
                 Vue.set(sL, 'count', count)
               })
@@ -270,53 +270,54 @@ class LazySync {
   }
 
   fetchPendingEntries () {
-    if (this.pending.entries.length > 0) {
-      const entryIds = this.pending.entries
-      const { model } = this
+    const { model, pending, entries, changeIndex } = this
+    if (pending.entries.length > 0) {
+      const entryIds = pending.entries
+      pending.entries = []
       Z.methods.get({ model, entryIds })
         .then(rows => {
           console.log('get', { model, entryIds }, { rows })
           rows.forEach(row => {
             Object.assign(row, {
               inSync: true,
-              key: [this.changeIndex, row.id].join()
+              key: [changeIndex, row.id].join()
             })
             Object.keys(row).forEach(key => {
-              Vue.set(this.entries[row.id], key, row[key])
+              Vue.set(entries[row.id], key, row[key])
             })
-            notifySyncCallbacks(this.entries[row.id])
+            notifySyncCallbacks(entries[row.id])
           })
         })
-      this.pending.entries = []
     }
   }
 
   fetchPendingLists () {
-    const { model, changeIndex } = this
-    const similar = {}
-    const pending = this.pending.lists.splice(0)
+    const { model, lazyResults, changeIndex, cache, pending, maxQueriesPerRequest } = this
 
-    pending
+    const similarQueries = {}
+    const pendingListHashes = pending.lists.splice(0)
+
+    pendingListHashes
       .forEach((hash, index) => {
-        const { query } = this.results[hash]
+        const { query } = lazyResults[hash]
         const { search, order, limit, offset } = query
         const similarHash = LazySync.hash(
           JSON.stringify({
             order,
             limit,
             offset,
-            search: Object.keys(search),
-            max: Math.floor(index / 50)
+            fields: Object.keys(search),
+            requestIndex: Math.floor(index / maxQueriesPerRequest)
           })
         )
-        similar[similarHash] = similar[similarHash] || []
-        similar[similarHash].push(hash)
+        similarQueries[similarHash] = similarQueries[similarHash] || []
+        similarQueries[similarHash].push(hash)
       })
 
-    Object.keys(similar)
+    Object.keys(similarQueries)
       .forEach(similarHash => {
-        const hashes = similar[similarHash]
-        const queries = hashes.map(hash => this.results[hash].query)
+        const hashes = similarQueries[similarHash]
+        const queries = hashes.map(hash => lazyResults[hash].query)
         const { order, limit, offset } = queries[0]
         const searches = queries.map(query => query.search)
         console.log('bulkFind', model, { queries, searches })
@@ -329,15 +330,15 @@ class LazySync {
 
               arrayOfLists.forEach((list, index) => {
                 const hash = hashes[index]
-                const lazyResult = this.results[hash]
-                this.cache.lists[hash] = list
-                // this will trigger an update and clear the array
+                const lazyResult = lazyResults[hash]
+
+                // cache the list of ids
+                cache.lists[hash] = list
+
+                // will clear the array and trigger an update
+                const entries = list.map(id => Z[model].id(id))
                 lazyResult.list.splice(0)
-                list.forEach(id => {
-                  const entry = Z[model].id(id)
-                  lazyResult.list.push(entry)
-                })
-                // this doesn't trigger an update
+                lazyResult.list.push(...entries)
                 lazyResult.inSync = true
                 notifySyncCallbacks(lazyResult)
               })
@@ -352,7 +353,7 @@ class LazySync {
     this.changeIndex++
     this.pending.counts = new Map()
     this.counts = {}
-    for (const lazyResult of Object.values(this.results)) {
+    for (const lazyResult of Object.values(this.lazyResults)) {
       lazyResult.invalidate()
     }
   }
@@ -361,7 +362,7 @@ class LazySync {
     const updatedFields = Object.keys(change)
     this.changeIndex++
     updatedFields.forEach(field => {
-      for (const lazyResult of Object.values(this.results)) {
+      for (const lazyResult of Object.values(this.lazyResults)) {
         const mightBeModified = JSON.stringify(lazyResult.query).indexOf(field) !== -1
         if (mightBeModified) {
           lazyResult.invalidate()
