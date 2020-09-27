@@ -143,19 +143,19 @@ class LazySync {
     const { model, cache, pending } = this
     const { query } = lazyResult
     const hash = LazySync.hash(JSON.stringify(query))
-    // Z[model].changeIndex will be incremented every time the model get invalidated by an event from the server
-    if (lazyResult.changeIndex !== this.changeIndex) {
-      lazyResult.changeIndex = this.changeIndex
 
+    // add lazyResult to pending lists fetchLater
+    pending.lists.push(hash)
+    this.fetchListsLater()
+
+    // set list to cached entries
+    if (lazyResult.list.length === 0) {
       const cachedList = cache.lists[hash]
-      if (cachedList) {
-        const entries = cachedList.map(id => Z[model].id(id))
-        lazyResult.list.splice(0)
-        lazyResult.list.push(...entries)
-      }
-      pending.lists.push(hash)
-      this.fetchListsLater()
+      const entries = cachedList ? cachedList.map(id => Z[model].id(id)) : []
+      lazyResult.list.splice(0)
+      lazyResult.list.push(...entries)
     }
+
     return lazyResult
   }
 
@@ -246,7 +246,7 @@ class LazySync {
       console.log('nothing to count', model)
       return
     }
-    console.log('before count', model, searches)
+
     Z.methods.bulkCount({ model, searches })
       .then(counts => {
         console.log('bulkCount results', counts)
@@ -407,7 +407,7 @@ class LazyEntry {
 class LazyResult {
   constructor (model, query) {
     const changeIndex = 0
-    Object.assign(this, { model, query, changeIndex, inSync: false })
+    Object.assign(this, { model, query, changeIndex, list: [], inSync: false })
     this.invalidate()
   }
 
@@ -415,6 +415,8 @@ class LazyResult {
     const { model, query } = this
     const { search } = query
     Z[model].clearCount(search)
+
+    const list = this.list
 
     Vue.set(this, 'inSync', false)
     Vue.delete(this, 'list')
@@ -424,7 +426,7 @@ class LazyResult {
       configurable: true,
       get () {
         delete this.list // delete getter
-        Vue.set(this, 'list', [])
+        Vue.set(this, 'list', list)
         Z[model].refresh(this)
         return this.list
       }
