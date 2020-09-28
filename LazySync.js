@@ -324,14 +324,15 @@ class LazySync {
 
         Z.methods.bulkFind({ model, searches, limit, offset, order })
           .then(arrayOfLists => {
-            // is supposed to fix a race condition that happens when find request is initiated, but invalidate() is called before it returns
-            if (Z[model].changeIndex === changeIndex) {
-              console.log('found', model, { queries, arrayOfLists })
+            console.log('found', model, { queries, arrayOfLists })
 
-              arrayOfLists.forEach((list, index) => {
-                const hash = hashes[index]
-                const lazyResult = lazyResults[hash]
+            arrayOfLists.forEach((list, index) => {
+              const hash = hashes[index]
+              const lazyResult = lazyResults[hash]
 
+              // is supposed to fix a race condition that happens when find request is initiated, but invalidate() is called before it returns
+              if (lazyResult.changeIndex < changeIndex) {
+                lazyResult.changeIndex = changeIndex
                 // cache the list of ids
                 cache.lists[hash] = list
 
@@ -341,10 +342,10 @@ class LazySync {
                 lazyResult.list.push(...entries)
                 lazyResult.inSync = true
                 notifySyncCallbacks(lazyResult)
-              })
-            } else {
-              console.log('Lucky we looked for this race condition, isn\'t it?')
-            }
+              } else {
+                console.log('Lucky we looked for this race condition, isn\'t it?')
+              }
+            })
           })
       })
   }
