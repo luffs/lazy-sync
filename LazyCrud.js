@@ -54,11 +54,22 @@ export const crud = {
   bulkCount: async function (session, { model, searches = [] }) {
     const bulkSelectQuery = generateBulkSelectQuery({ model, searches }, true)
     const rows = await sequelize.query(bulkSelectQuery, { type: QueryTypes.SELECT })
-    const results = searches.map(() => 0)
-    rows.forEach(({ queryId, found }) => {
-      results[queryId] = found
-    })
-    return results
+    if (rows.length === searches.length) {
+      const results = []
+      rows.forEach((row, index) => {
+        const { queryId, found } = row
+        const validQueryId = (queryId === index) && (results[queryId] === undefined)
+        const validResult = typeof found === 'number'
+        if (validQueryId && validResult) {
+          results[queryId] = found
+        } else {
+          throw new Error('Count error, invalid result')
+        }
+      })
+      return results
+    } else {
+      throw new Error('Count error, result.length mismatch')
+    }
   },
   bulkFind: async function (session, { model, searches = [], limit = undefined, offset = 0, order = [] }) {
     const bulkSelectQuery = generateBulkSelectQuery({ model, searches, limit, offset, order })

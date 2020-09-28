@@ -105,7 +105,6 @@ class LazySync {
     const query = { model, search }
     const hash = LazySync.hash(JSON.stringify(query))
 
-    // console.log('get count', model)
     if (typeof counts[hash] === 'number') {
       return counts[hash]
     } else if (lazyList) {
@@ -229,44 +228,63 @@ class LazySync {
   }
 
   fetchPendingCounts () {
-    const { model, pending, fetching, cache } = this
-    const hashes =
+    const { model, pending, fetching, cache, maxQueriesPerRequest } = this
+    const pendingCounts =
       Array.from(pending.counts.keys())
         .filter(hash => !fetching.counts.has(hash))
 
-    const searches = []
-    hashes
-      .forEach(hash => {
+    const similarQueries = {}
+
+    pendingCounts
+      .forEach((hash, index) => {
         const [lazyResult] = pending.counts.get(hash)
+
         fetching.counts.set(hash, true)
-        searches.push(lazyResult.query.search)
+
+        const { search } = lazyResult.query
+        const similarHash = LazySync.hash(
+          JSON.stringify({
+            fields: Object.keys(search),
+            requestIndex: Math.floor(index / (maxQueriesPerRequest * 2))
+          })
+        )
+
+        similarQueries[similarHash] = similarQueries[similarHash] || []
+        similarQueries[similarHash].push(hash)
       })
 
-    if (searches.length === 0) {
+    if (Object.keys(similarQueries).length === 0) {
       console.log('nothing to count', model)
       return
     }
 
-    Z.methods.bulkCount({ model, searches })
-      .then(counts => {
-        console.log('bulkCount results', counts)
-        counts
-          .forEach((count, index) => {
-            const hash = hashes[index]
-            counts[hash] = cache.counts[hash] = count || 0
-            fetching.counts.delete(hash)
-            if (pending.counts.has(hash)) {
-              const lazyLists = pending.counts.get(hash)
-              pending.counts.delete(hash)
-              lazyLists.forEach(sL => {
-                Vue.set(sL, 'count', count)
-              })
-            }
-          })
+    Object.keys(similarQueries).forEach(similarHash => {
+      const hashes = similarQueries[similarHash]
+      const searches = hashes.map(hash => {
+        const [lazyResult] = pending.counts.get(hash)
+        return lazyResult.query.search
       })
-      .catch(error => {
-        console.error('count error', { model, searches, error })
-      })
+
+      Z.methods.bulkCount({ model, searches })
+        .then(counts => {
+          counts
+            .forEach((count, index) => {
+              const hash = hashes[index]
+              counts[hash] = cache.counts[hash] = count || 0
+              fetching.counts.delete(hash)
+              if (pending.counts.has(hash)) {
+                const lazyLists = pending.counts.get(hash)
+                pending.counts.delete(hash)
+                lazyLists.forEach(sL => {
+                  Vue.set(sL, 'count', count)
+                })
+              }
+            })
+        })
+        .catch(error => {
+          console.error('count error', { model, searches, error })
+        })
+    })
   }
 
   fetchPendingEntries () {
@@ -276,7 +294,6 @@ class LazySync {
       pending.entries = []
       Z.methods.get({ model, entryIds })
         .then(rows => {
-          console.log('get', { model, entryIds }, { rows })
           rows.forEach(row => {
             Object.assign(row, {
               inSync: true,
@@ -320,12 +337,9 @@ class LazySync {
         const queries = hashes.map(hash => lazyResults[hash].query)
         const { order, limit, offset } = queries[0]
         const searches = queries.map(query => query.search)
-        console.log('bulkFind', model, { queries, searches })
 
         Z.methods.bulkFind({ model, searches, limit, offset, order })
           .then(arrayOfLists => {
-            console.log('found', model, { queries, arrayOfLists })
-
             arrayOfLists.forEach((list, index) => {
               const hash = hashes[index]
               const lazyResult = lazyResults[hash]
@@ -408,7 +422,7 @@ class LazyEntry {
 class LazyResult {
   constructor (model, query) {
     const changeIndex = 0
-    Object.assign(this, { model, query, changeIndex, list: [], inSync: false })
+    Object.assign(this, { model, query, changeIndex, _list: [], inSync: false })
     this.invalidate()
   }
 
@@ -416,8 +430,6 @@ class LazyResult {
     const { model, query } = this
     const { search } = query
     Z[model].clearCount(search)
-
-    const list = this.list
 
     Vue.set(this, 'inSync', false)
     Vue.delete(this, 'list')
@@ -427,7 +439,7 @@ class LazyResult {
       configurable: true,
       get () {
         delete this.list // delete getter
-        Vue.set(this, 'list', list)
+        Vue.set(this, 'list', this._list)
         Z[model].refresh(this)
         return this.list
       }
