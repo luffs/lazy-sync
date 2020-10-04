@@ -56,9 +56,10 @@ export const crud = {
     const rows = await sequelize.query(bulkSelectQuery, { type: QueryTypes.SELECT })
     if (rows.length === searches.length) {
       const results = []
-      rows.forEach((row, index) => {
-        const { queryId, found } = row
-        const validQueryId = (queryId === index) && (results[queryId] === undefined)
+      rows.forEach(row => {
+        const { queryId } = row
+        const found = parseInt(row.found, 10) // string in postgres, number in mysql
+        const validQueryId = (queryId < searches.length) && (results[queryId] === undefined)
         const validResult = typeof found === 'number'
         if (validQueryId && validResult) {
           results[queryId] = found
