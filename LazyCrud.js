@@ -282,7 +282,7 @@ async function addOrRemoveMember (session, accessorStr, { model, entryId, member
   throw new Error(`${model} & ${memberModel} are not in a many-to-many relationship`)
 }
 
-function setSearchQuery (model, where, search, include, queryId = 0) {
+function setSearchQuery (model, where, search, include) {
   if (search && typeof search === 'object') {
     Object.keys(search).forEach(field => {
       where[Op[field] || field] = resolveOpsInSearchQuery(model, search[field])
@@ -352,7 +352,7 @@ function generateBulkSelectQuery ({ model, searches, order, limit, offset }, isC
     .map((search, queryId) => {
       const attributes = [[literal(String(queryId)), 'queryId'], isCount ? [fn('COUNT', col('*')), 'found'] : 'id']
       const where = {}
-      setSearchQuery(model, where, search, include, queryId)
+      setSearchQuery(model, where, search, include)
       return generateSelectQuery.call(Model, { where, order, limit, offset, include, attributes, distinct: isCount })
     })
 

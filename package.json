@@ -1,6 +1,6 @@
 {
   "name": "lazy-sync",
-  "version": "1.4.6",
+  "version": "1.4.7",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -28,8 +28,5 @@
   "repository": {
     "type": "git",
     "url": "https://gitlab.com/rb.luff/lazy-sync.git"
-  },
-  "dependencies": {
-    "lodash": "^4.17.20"
   }
 }
