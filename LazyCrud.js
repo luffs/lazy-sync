@@ -1,8 +1,9 @@
-import Sequelize, { col, fn, literal, Op, QueryTypes } from 'sequelize'
+import Sequelize from 'sequelize'
 import Utils from 'sequelize/lib/utils.js'
 
 // TODO order bulkFind... maybe replace it with manually written sql
 
+const { col, fn, literal, Op, QueryTypes } = Sequelize
 let db = {}
 let sequelize = null
 let changeListener = (session, { created, related, updated, deleted, zombies }) => {}
