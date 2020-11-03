@@ -80,7 +80,10 @@ export const crud = {
     rows.forEach(({ id, queryId }) => {
       results[queryId].push(id)
     })
-    return results
+    return results.map(ids => {
+      // only return unique ids
+      return Array.from(new Set(ids))
+    })
   },
   find: async function (session, { model, search = {}, limit = undefined, offset = 0, order = [] }) {
     const attributes = ['id']
@@ -105,7 +108,9 @@ export const crud = {
     setSearchQuery(model, where, search, include)
 
     const rows = await db[model].findAll({ attributes, where, limit, offset, order, include })
-    return rows.map(row => row.id)
+    const ids = rows.map(row => row.id)
+    // only return unique ids
+    return Array.from(new Set(ids))
   },
   get: async function (session, { model, entryIds = [] }) {
     const where = { id: entryIds }
