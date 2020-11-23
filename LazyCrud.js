@@ -80,10 +80,7 @@ export const crud = {
     rows.forEach(({ id, queryId }) => {
       results[queryId].push(id)
     })
-    return results.map(ids => {
-      // only return unique ids
-      return Array.from(new Set(ids))
-    })
+    return results.map(ids => Array.from(new Set(ids)))
   },
   find: async function (session, { model, search = {}, limit = undefined, offset = 0, order = [] }) {
     const attributes = ['id']
@@ -109,7 +106,6 @@ export const crud = {
 
     const rows = await db[model].findAll({ attributes, where, limit, offset, order, include })
     const ids = rows.map(row => row.id)
-    // only return unique ids
     return Array.from(new Set(ids))
   },
   get: async function (session, { model, entryIds = [] }) {
@@ -298,7 +294,7 @@ function setSearchQuery (model, where, search, include) {
     }
   }
   getParentModel(model, where).forEach(parentModel => {
-    const parentId = search[parentModel]
+    const parentSearch = search[parentModel]
     // since it might be included by the "order" code above already
     let inc = include.find(inc => inc.model === db[parentModel])
     if (!inc) {
@@ -307,9 +303,9 @@ function setSearchQuery (model, where, search, include) {
     }
     inc.required = true
     // use Op.in if parentId is array of ids
-    inc.where = Array.isArray(parentId)
-      ? { id: { [Op.in]: parentId } }
-      : { id: parentId }
+    inc.where = typeof parentSearch === 'object' && !Array.isArray(parentSearch)
+      ? resolveOpsInSearchQuery(parentModel, parentSearch)
+      : { id: parentSearch }
 
     delete where[parentModel]
   })
