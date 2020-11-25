@@ -352,7 +352,7 @@ function generateBulkSelectQuery ({ model, searches, order, limit, offset }, isC
   const Model = db[model]
   const sqlQueries = searches
     .map((search, queryId) => {
-      const attributes = [[literal(String(queryId)), 'queryId'], isCount ? [fn('COUNT', col('*')), 'found'] : 'id']
+      const attributes = [[literal(String(queryId)), 'queryId'], isCount ? [literal(`COUNT(DISTINCT(\`${Model.name}\`.\`id\`))`), 'found'] : 'id']
       const where = {}
       setSearchQuery(model, where, search, include)
       return generateSelectQuery.call(Model, { where, order, limit, offset, include, attributes, distinct: isCount })
