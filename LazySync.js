@@ -244,7 +244,7 @@ class LazySync {
         const { search } = lazyResult.query
         const similarHash = LazySync.hash(
           JSON.stringify({
-            fields: Object.keys(search),
+            fields: Object.keys(search).filter(key => search[key] !== undefined),
             requestIndex: Math.floor(index / (maxQueriesPerRequest * 2))
           })
         )
