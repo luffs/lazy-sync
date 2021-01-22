@@ -121,6 +121,7 @@ class LazySync {
   }
 
   find (search = {}, options = {}) {
+    search = JSON.parse(JSON.stringify(search))
     const { model, lazyResults } = this
     const query = { search }
     const { limit, offset, order } = options
