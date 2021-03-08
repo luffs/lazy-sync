@@ -9,8 +9,10 @@ function notifySyncCallbacks (list) {
   }
 }
 
+let crudModels
 export const Z = {
   init (models, methods) {
+    crudModels = models
     this.methods = methods || this.methods
     models.forEach(model => {
       this[model] = new LazySync({ model })
@@ -387,6 +389,19 @@ class LazySync {
     })
   }
 
+  static queryHash (search, options) {
+    search = JSON.parse(JSON.stringify(search))
+    const query = { search }
+    const { limit, offset, order } = options
+    options = { limit, offset, order }
+    for (const key in options) {
+      if (options[key]) {
+        query[key] = options[key]
+      }
+    }
+    return this.hash(JSON.stringify(query))
+  }
+
   static hash (str) {
     let hash = 0; let i; let chr
     if (str.length === 0) return hash
@@ -468,6 +483,36 @@ class LazyResult {
         inSyncCallbacks.set(this, [inSyncCallback])
         Z[this.model].refresh(this)
       }
+    }
+  }
+}
+
+export const zMixin = {
+  data: function () {
+    const z = {}
+    crudModels.forEach(model => {
+      z[model] = {
+        refs: {},
+        lists: {},
+        id: (id) => {
+          if (!this.z[model].refs[id]) {
+            const item = Z[model].id(id)
+            this.$set(this.z[model].refs, id, item)
+          }
+          return this.z[model].refs[id]
+        },
+        find: (search, options) => {
+          const hash = Z.queryHash(search, options)
+          if (!this.z[model].lists[hash]) {
+            const list = Z[model].find(search, options)
+            this.$set(this.z[model].lists, hash, list)
+          }
+          return this.z[model].lists[hash]
+        }
+      }
+    })
+    return {
+      z
     }
   }
 }
