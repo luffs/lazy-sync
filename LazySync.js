@@ -501,8 +501,8 @@ export const zMixin = {
           }
           return this.z[model].refs[id]
         },
-        find: (search, options) => {
-          const hash = Z.queryHash(search, options)
+        find: (search, options = {}) => {
+          const hash = LazySync.queryHash(search, options)
           if (!this.z[model].lists[hash]) {
             const list = Z[model].find(search, options)
             this.$set(this.z[model].lists, hash, list)
