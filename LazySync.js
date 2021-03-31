@@ -231,7 +231,7 @@ class LazySync {
   }
 
   fetchPendingCounts () {
-    const { model, pending, fetching, cache, maxQueriesPerRequest } = this
+    const { model, pending, counts, fetching, cache, maxQueriesPerRequest } = this
     const pendingCounts =
       Array.from(pending.counts.keys())
         .filter(hash => !fetching.counts.has(hash))
@@ -269,8 +269,8 @@ class LazySync {
       })
 
       Z.methods.bulkCount({ model, searches })
-        .then(counts => {
-          counts
+        .then(results => {
+          results
             .forEach((count, index) => {
               const hash = hashes[index]
               counts[hash] = cache.counts[hash] = count || 0
