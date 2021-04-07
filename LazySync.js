@@ -497,7 +497,7 @@ export const zMixin = {
         id: (id) => {
           if (!this.z[model].refs[id]) {
             const item = Z[model].id(id)
-            this.$set(this.z[model].refs, id, item)
+            Vue.set(this.z[model].refs, id, item)
           }
           return this.z[model].refs[id]
         },
@@ -505,7 +505,7 @@ export const zMixin = {
           const hash = LazySync.queryHash(search, options)
           if (!this.z[model].lists[hash]) {
             const list = Z[model].find(search, options)
-            this.$set(this.z[model].lists, hash, list)
+            Vue.set(this.z[model].lists, hash, list)
           }
           return this.z[model].lists[hash]
         }
