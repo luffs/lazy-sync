@@ -182,27 +182,31 @@ export const crud = {
       }
     }) */
 
+    const memberFields = Object.keys(objValues)
+      .filter(memberModel => {
+        const association = db[model].associations[memberModel]
+        return association && ['BelongsToMany', 'HasMany'].includes(association.associationType)
+      })
+
+    const updateMembersPromises = memberFields.map(memberModel => {
+      const memberEntryIds = objValues[memberModel]
+      delete objValues[memberModel]
+      // TODO don't call unless changed?
+      return this.setMembers(session, {
+        model,
+        entryId: objEntry.id,
+        memberModel,
+        memberEntryIds
+      })
+    })
+    await Promise.all(updateMembersPromises)
+
     const updatedEntry = await objEntry.update(objValues)
     const changed = {}
     Object.keys(updatedEntry._changed).forEach(key => {
       changed[key] = updatedEntry[key]
     })
-    Object.keys(objValues)
-      .forEach(memberModel => {
-        const association = db[model].associations[memberModel]
-        if (association) {
-          if (['BelongsToMany', 'HasMany'].includes(association.associationType)) {
-            const memberEntryIds = objValues[memberModel]
-            // TODO don't call unless changed
-            this.setMembers(session, {
-              model,
-              entryId: updatedEntry.id,
-              memberModel,
-              memberEntryIds
-            })
-          }
-        }
-      })
+
     if (Object.keys(changed).length > 0) {
       changeListener(session, {
         updated: [
