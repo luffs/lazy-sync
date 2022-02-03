@@ -1,9 +1,6 @@
 import Sequelize from 'sequelize'
 import Utils from 'sequelize/lib/utils.js'
 
-// TODO order bulkFind... maybe replace it with manually written sql
-
-const { col, fn, literal, Op, QueryTypes } = Sequelize
 let db = {}
 let sequelize = null
 let changeListener = (session, { created, related, updated, deleted, zombies }) => {}
@@ -53,8 +50,8 @@ export const crud = {
     return newEntry
   },
   bulkCount: async function (session, { model, searches = [] }) {
-    const bulkSelectQuery = generateBulkSelectQuery({ model, searches }, true)
-    const rows = await sequelize.query(bulkSelectQuery, { type: QueryTypes.SELECT })
+    const bulkSelectQuery = generateBulkSelectQuery({ model, order: [], searches }, true)
+    const rows = await sequelize.query(bulkSelectQuery, { type: Sequelize.QueryTypes.SELECT })
     if (rows.length === searches.length) {
       const results = []
       rows.forEach(row => {
@@ -75,7 +72,7 @@ export const crud = {
   },
   bulkFind: async function (session, { model, searches = [], limit = undefined, offset = 0, order = [] }) {
     const bulkSelectQuery = generateBulkSelectQuery({ model, searches, limit, offset, order })
-    const rows = await sequelize.query(bulkSelectQuery, { type: QueryTypes.SELECT })
+    const rows = await sequelize.query(bulkSelectQuery, { type: Sequelize.QueryTypes.SELECT })
     const results = searches.map(() => [])
     rows.forEach(({ id, queryId }) => {
       results[queryId].push(id)
@@ -291,7 +288,7 @@ async function addOrRemoveMember (session, accessorStr, { model, entryId, member
 function setSearchQuery (model, where, search, include) {
   if (search && typeof search === 'object') {
     Object.keys(search).forEach(field => {
-      where[Op[field] || field] = resolveOpsInSearchQuery(model, search[field])
+      where[Sequelize.Op[field] || field] = resolveOpsInSearchQuery(model, search[field])
     })
     for (const symbol of Object.getOwnPropertySymbols(search)) {
       where[symbol] = resolveOpsInSearchQuery(model, search[symbol])
@@ -323,7 +320,7 @@ function resolveOpsInSearchQuery (model, search) {
   } else if (search && typeof search === 'object') {
     returnValue = {}
     Object.keys(search).forEach(opOrField => {
-      returnValue[Op[opOrField] || opOrField] = resolveOpsInSearchQuery(model, search[opOrField])
+      returnValue[Sequelize.Op[opOrField] || opOrField] = resolveOpsInSearchQuery(model, search[opOrField])
     })
   } else if (db[model].rawAttributes[search]) {
     returnValue = Sequelize.col(search)
@@ -341,7 +338,7 @@ function generateBulkSelectQuery ({ model, searches, order, limit, offset }, isC
     if (!Array.isArray(order) || order.length === 0) {
       order = db[model].rawAttributes.name ? ['name'] : []
     } else if (Array.isArray(order[0])) {
-      // 'Locations' to db.Locations etc
+      // 'Locations' to object in db['Locations'] etc
       const orderFirstArgument = order[0][0]
       if (db[orderFirstArgument]) {
         order[0][0] = db[orderFirstArgument]
@@ -356,7 +353,19 @@ function generateBulkSelectQuery ({ model, searches, order, limit, offset }, isC
   const Model = db[model]
   const sqlQueries = searches
     .map((search, queryId) => {
-      const attributes = [[literal(String(queryId)), 'queryId'], isCount ? [literal(`COUNT(DISTINCT(\`${Model.name}\`.\`id\`))`), 'found'] : 'id']
+      const attributes = [[Sequelize.literal(String(queryId)), 'queryId'], 'id']
+      if (isCount) {
+        // special attribute for bulkCount
+        attributes.push([Sequelize.literal(`COUNT(DISTINCT(\`${Model.name}\`.\`id\`))`), 'found'])
+      }
+
+      // Fetch attributes used for ordering. Well, unless attr is 'id' since it's already added
+      order.forEach(item => {
+        if (Array.isArray(item) && typeof item[0] === 'string' && item[0] !== 'id') {
+          attributes.push(item[0])
+        }
+      })
+
       const where = {}
       setSearchQuery(model, where, search, include)
       return generateSelectQuery.call(Model, { where, order, limit, offset, include, attributes, distinct: isCount })
