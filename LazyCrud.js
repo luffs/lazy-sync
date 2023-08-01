@@ -1,5 +1,4 @@
-import Sequelize from 'sequelize'
-import Utils from 'sequelize/lib/utils.js'
+import Sequelize, { literal, QueryTypes } from 'sequelize'
 
 let db = {}
 let sequelize = null
@@ -19,8 +18,7 @@ export const crud = {
   },
   count: async function (session, { model, search = {} }) {
     const include = []
-    const where = {}
-    setSearchQuery(model, where, search, include)
+    const where = resolveOpsInSearchQuery({ model, search, include, isCount: true })
     return db[model].count({ where, include })
   },
   create: async function (session, { model, objValues }) {
@@ -50,17 +48,17 @@ export const crud = {
     return newEntry
   },
   bulkCount: async function (session, { model, searches = [] }) {
-    const bulkSelectQuery = generateBulkSelectQuery({ model, order: [], searches }, true)
+    const bulkSelectQuery = generateBulkSelectQuery({ model, order: [], searches, isCount: true })
     const rows = await sequelize.query(bulkSelectQuery, { type: Sequelize.QueryTypes.SELECT })
     if (rows.length === searches.length) {
       const results = []
       rows.forEach(row => {
-        const { queryId } = row
+        const { queryindex } = row
         const found = parseInt(row.found, 10) // string in postgres, number in mysql
-        const validQueryId = (queryId < searches.length) && (results[queryId] === undefined)
+        const validQueryIndex = (queryindex < searches.length) && (results[queryindex] === undefined)
         const validResult = typeof found === 'number'
-        if (validQueryId && validResult) {
-          results[queryId] = found
+        if (validQueryIndex && validResult) {
+          results[queryindex] = found
         } else {
           throw new Error('Count error, invalid result')
         }
@@ -74,19 +72,18 @@ export const crud = {
     const bulkSelectQuery = generateBulkSelectQuery({ model, searches, limit, offset, order })
     const rows = await sequelize.query(bulkSelectQuery, { type: Sequelize.QueryTypes.SELECT })
     const results = searches.map(() => [])
-    rows.forEach(({ id, queryId }) => {
-      results[queryId].push(id)
+    rows.forEach(({ id, queryindex }) => {
+      results[queryindex].push(id)
     })
     return results.map(ids => Array.from(new Set(ids)))
   },
   find: async function (session, { model, search = {}, limit = undefined, offset = 0, order = [] }) {
     const attributes = ['id']
     const include = []
-    const where = {}
 
     // order by name by default, if model has name field
     if (!Array.isArray(order) || order.length === 0) {
-      order = db[model].rawAttributes.name ? ['name'] : []
+      order = db[model].getAttributes().name ? ['name'] : []
     } else if (Array.isArray(order[0])) {
       // 'Locations' to db.Locations etc
       const orderFirstArgument = order[0][0]
@@ -99,8 +96,7 @@ export const crud = {
       }
     }
 
-    setSearchQuery(model, where, search, include)
-
+    const where = resolveOpsInSearchQuery({ model, search, include })
     const rows = await db[model].findAll({ attributes, where, limit, offset, order, include })
     const ids = rows.map(row => row.id)
     return Array.from(new Set(ids))
@@ -197,20 +193,13 @@ export const crud = {
       })
     })
     await Promise.all(updateMembersPromises)
-
     const updatedEntry = await objEntry.update(objValues)
-    const changed = {}
-    Object.keys(updatedEntry._changed).forEach(key => {
-      changed[key] = updatedEntry[key]
+    objValues.updatedAt = objEntry.updatedAt
+    changeListener(session, {
+      updated: [
+        [model, [entryId], objValues]
+      ]
     })
-
-    if (Object.keys(changed).length > 0) {
-      changeListener(session, {
-        updated: [
-          [model, [entryId], changed]
-        ]
-      })
-    }
     return updatedEntry
   },
   delete: async function (session, { model, entryId }) {
@@ -233,21 +222,6 @@ export const crud = {
     })
     return result
   }
-}
-
-function getParentModel (strModel, where) {
-  return Object.keys(where)
-    .filter(key => {
-      const association = (db[key] && db[key].associations[strModel]) || {}
-      const { foreignKey, associationType } = association
-
-      if (associationType === 'HasMany') {
-        where[foreignKey] = where[key]
-        delete where[key]
-        return false
-      }
-      return associationType === 'BelongsToMany'
-    })
 }
 
 async function addOrRemoveMember (session, accessorStr, { model, entryId, memberModel, memberEntryId }) {
@@ -285,58 +259,15 @@ async function addOrRemoveMember (session, accessorStr, { model, entryId, member
   throw new Error(`${model} & ${memberModel} are not in a many-to-many relationship`)
 }
 
-function setSearchQuery (model, where, search, include) {
-  if (search && typeof search === 'object') {
-    Object.keys(search).forEach(field => {
-      where[Sequelize.Op[field] || field] = resolveOpsInSearchQuery(model, search[field])
-    })
-    for (const symbol of Object.getOwnPropertySymbols(search)) {
-      where[symbol] = resolveOpsInSearchQuery(model, search[symbol])
-    }
-  }
-  getParentModel(model, where).forEach(parentModel => {
-    const parentSearch = search[parentModel]
-    // since it might be included by the "order" code above already
-    let inc = include.find(inc => inc.model === db[parentModel])
-    if (!inc) {
-      inc = { model: db[parentModel], attributes: ['id'] }
-      include.push(inc)
-    }
-    inc.required = true
-    // use Op.in if parentId is array of ids
-    inc.where = typeof parentSearch === 'object' && !Array.isArray(parentSearch)
-      ? resolveOpsInSearchQuery(parentModel, parentSearch)
-      : { id: parentSearch }
-
-    delete where[parentModel]
-  })
-}
-
 // what could possibly go wrong
-function resolveOpsInSearchQuery (model, search) {
-  let returnValue
-  if (Array.isArray(search)) {
-    returnValue = search.map(subSearch => resolveOpsInSearchQuery(model, subSearch))
-  } else if (search && typeof search === 'object') {
-    returnValue = {}
-    Object.keys(search).forEach(opOrField => {
-      returnValue[Sequelize.Op[opOrField] || opOrField] = resolveOpsInSearchQuery(model, search[opOrField])
-    })
-  } else if (db[model].rawAttributes[search]) {
-    returnValue = Sequelize.col(search)
-  } else {
-    returnValue = search
-  }
-  return returnValue
-}
 
-function generateBulkSelectQuery ({ model, searches, order, limit, offset }, isCount = false) {
+function generateBulkSelectQuery ({ model, searches, order, limit, offset, isCount = false }) {
   const include = []
 
   if (!isCount) {
     // order by name by default, if model has name field
     if (!Array.isArray(order) || order.length === 0) {
-      order = db[model].rawAttributes.name ? ['name'] : []
+      order = db[model].getAttributes().name ? ['name'] : []
     } else if (Array.isArray(order[0])) {
       // 'Locations' to object in db['Locations'] etc
       const orderFirstArgument = order[0][0]
@@ -350,13 +281,16 @@ function generateBulkSelectQuery ({ model, searches, order, limit, offset }, isC
     }
   }
 
-  const Model = db[model]
+  const dbModel = db[model]
   const sqlQueries = searches
-    .map((search, queryId) => {
-      const attributes = [[Sequelize.literal(String(queryId)), 'queryId'], 'id']
+    .map((search, queryindex) => {
+      const attributes = []
       if (isCount) {
-        // special attribute for bulkCount
-        attributes.push([Sequelize.literal(`COUNT(DISTINCT(\`${Model.name}\`.\`id\`))`), 'found'])
+        attributes.push([Sequelize.literal('COUNT(*)'), 'found'])
+      } else {
+        // return the primaryKey, usually "id"
+        const primaryKey = Object.values(dbModel.primaryKeys)[0]
+        attributes.push(primaryKey.field)
       }
 
       // Fetch attributes used for ordering. Well, unless attr is 'id' since it's already added
@@ -366,9 +300,27 @@ function generateBulkSelectQuery ({ model, searches, order, limit, offset }, isC
         }
       })
 
-      const where = {}
-      setSearchQuery(model, where, search, include)
-      return generateSelectQuery.call(Model, { where, order, limit, offset, include, attributes, distinct: isCount })
+      const where = resolveOpsInSearchQuery({ model, search, include })
+      if (dbModel.options.paranoid) {
+        where.deletedAt = null
+      }
+      const options = {
+        type: QueryTypes.SELECT,
+        model: dbModel,
+        where,
+        order,
+        limit,
+        offset,
+        include,
+        attributes,
+        distinct: isCount
+      }
+      const tableName = dbModel.getTableName()
+
+      // Prefix each query with a queryindex, like SELECT 0 AS queryindex, SELECT 1 AS queryindex etc
+      // CANNOT be camelCase, must be lowercase, because postgres is silly and return it as lowercase
+      return dbModel.queryGenerator.selectQuery(tableName, options, dbModel)
+        .replace('SELECT', `SELECT ${queryindex} AS queryindex,`)
     })
 
   return sqlQueries
@@ -379,54 +331,53 @@ function generateBulkSelectQuery ({ model, searches, order, limit, offset }, isC
     .join(' UNION ')
 }
 
-function generateSelectQuery (options) {
-  this.warnOnInvalidOptions(options, Object.keys(this.rawAttributes))
+function resolveOpsInSearchQuery ({ model, search, include, isCount = false }) {
+  let where = search
+  includeParentModels({ model, search, include, isCount })
+  if (Array.isArray(search)) {
+    where = search.map(subSearch => resolveOpsInSearchQuery({ model, search: subSearch, include, isCount }))
+  } else if (search && typeof search === 'object') {
+    where = {}
+    Object.keys(search).forEach(opOrField => {
+      where[Sequelize.Op[opOrField] || opOrField] = resolveOpsInSearchQuery({ model, search: search[opOrField], include, isCount })
+    })
+  } else if (db[model].getAttributes()[search]) {
+    // ex. updatedAt = col(createdAt)
+    where = Sequelize.col(search)
+  }
+  return where
+}
 
-  const tableNames = {}
+function includeParentModels ({ model, search, include, isCount }) {
+  const searchParams = Object.keys(search || {})
+  searchParams.forEach(searchKey => {
+    const association = (db[model] && db[model].associations[searchKey]) || {}
+    const { associationType } = association
+    if (associationType === 'BelongsToMany') {
+      const { combinedName, target, through, as } = association
+      const parentSearch = search[searchKey]
+      // since it might be included by the "order" code above already
+      let inc = include.find(inc => inc.model === db[combinedName])
+      if (!inc) {
+        inc = {
+          as,
+          parent: {
+            model: db[model]
+          },
+          association,
+          model: target,
+          through: {
+            model: through.model,
+            attributes: []
+          },
+          attributes: []
+        }
+        include.push(inc)
+      }
+      inc.required = true
+      inc.where = { id: parentSearch }
 
-  tableNames[this.getTableName(options)] = true
-  options = Utils.cloneDeep(options)
-
-  // set rejectOnEmpty option, defaults to model options
-  options.rejectOnEmpty = Object.prototype.hasOwnProperty.call(options, 'rejectOnEmpty')
-    ? options.rejectOnEmpty
-    : this.options.rejectOnEmpty
-
-  this._injectScope(options)
-  this._conformIncludes(options, this)
-  this._expandAttributes(options)
-  this._expandIncludeAll(options)
-
-  options.originalAttributes = this._injectDependentVirtualAttributes(options.attributes)
-
-  if (options.include) {
-    options.hasJoin = true
-
-    this._validateIncludedElements(options, tableNames)
-
-    // If we're not raw, we have to make sure we include the primary key for de-duplication
-    if (
-      options.attributes &&
-      !options.raw &&
-      this.primaryKeyAttribute &&
-      !options.attributes.includes(this.primaryKeyAttribute) &&
-      (!options.group || !options.hasSingleAssociation || options.hasMultiAssociation)
-    ) {
-      options.attributes = [this.primaryKeyAttribute].concat(options.attributes)
+      delete search[searchKey]
     }
-  }
-
-  if (!options.attributes) {
-    options.attributes = Object.keys(this.rawAttributes)
-    options.originalAttributes = this._injectDependentVirtualAttributes(options.attributes)
-  }
-
-  // whereCollection is used for non-primary key updates
-  this.options.whereCollection = options.where || null
-
-  Utils.mapFinderOptions(options, this)
-
-  options = this._paranoidClause(this, options)
-  const selectOptions = Object.assign({}, options, { tableNames: Object.keys(tableNames) })
-  return this.QueryGenerator.selectQuery(this.getTableName(selectOptions), selectOptions, this)
+  })
 }

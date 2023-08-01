@@ -1,6 +1,6 @@
 {
   "name": "lazy-sync",
-  "version": "1.7.5",
+  "version": "2.0.0",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -9,20 +9,11 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "eslint": "^6.8.0",
-    "sequelize": "^5.22.3",
+    "@rushstack/eslint-patch": "^1.3.2",
+    "@vue/eslint-config-standard": "^8.0.1",
+    "eslint": "^8.5.0",
+    "sequelize": "^6.32.0",
     "standard": "^14.3.3"
-  },
-  "eslintConfig": {
-    "root": true,
-    "env": {
-      "node": true
-    },
-    "extends": "standard",
-    "parserOptions": {
-      "parser": "babel-eslint"
-    },
-    "rules": {}
   },
   "homepage": "https://gitlab.com/rb.luff/lazy-sync",
   "repository": {

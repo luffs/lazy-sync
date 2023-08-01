@@ -42,3 +42,66 @@ What's happening below the surface is:
 5. If a post gets modified, the post gets updated directly. Only lists that queries fields that have been modified will be invalidated.
 
 Implementation of communication, access control and limiting queries made by untrusted users is left as an exercise. (for now...)
+
+# Installation
+```
+npm i lazy-sync
+```
+
+# Frontend example
+```js
+import { Z } from 'lazy-sync/LazySync'
+
+// these are server functions called by lazySync
+const clientApi = {
+  access: {
+    async create ({ model, objValues }) {},
+    async addMember ({ model, entryId, memberModel, memberEntryId }) {},
+    async removeMember ({ model, entryId, memberModel, memberEntryId }) {},
+    async bulkCount ({ model, searches = [] }) {},
+    async bulkFind ({ model, searches = [], limit = undefined, offset = 0, order = [] }) {},
+    async get ({ model, entryIds = [] }) {},
+    async order ({ model, entryIds = [], order = [] }) {},
+    async update ({ model, entryId, objValues }) {},
+    async delete ({ model, entryId }) {},
+    async restore ({ model, entryId }) {}
+  }
+}
+
+// replace them with a socket.io event call to 'api'
+Object.keys(clientApi.access).forEach(method => {
+  clientApi.access[method] = args => {
+    const api = 'access'
+    return new Promise((resolve, reject) => {
+      socket.emit('api', { api, method, args }, function callback (error, result) {
+        error ? reject(new Error(error)) : resolve(result)
+      })
+    })
+  }
+})
+
+Z.init(['Posts', 'Users', 'News'], clientApi.access)
+
+export const socket = io(import.meta.env.VITE_BACKEND_URL)
+socket
+  .on('connect', () => {
+    console.log('connected to websocket')
+    Object.keys(Z).forEach(model => {
+      if (typeof Z[model].ready === 'boolean') {
+        // set ready to true when ready
+        Z[model].ready = true
+        Z[model].invalidate()
+      }
+    })
+  })
+  .on('z', data => {
+    Z.onChange(data)
+  })
+```
+
+# Backend example
+```
+TODO
+```
+
+
