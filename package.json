@@ -1,6 +1,6 @@
 {
   "name": "lazy-sync",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -12,6 +12,7 @@
     "@rushstack/eslint-patch": "^1.3.2",
     "@vue/eslint-config-standard": "^8.0.1",
     "eslint": "^8.5.0",
+    "eslint-plugin-vue": "^9.0.0",
     "sequelize": "^6.32.0",
     "standard": "^14.3.3"
   },

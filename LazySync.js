@@ -19,7 +19,6 @@ export const Z = {
     })
   },
   onChange ({ c: created = [], r: related = [], u: updated = [], d: deleted = [], z: zombies = [] }) {
-    console.log('changes', { created, related, updated, deleted, zombies });
 
     [...created, ...related, ...deleted, ...zombies]
       .forEach(([model]) => {
@@ -70,7 +69,6 @@ class LazySync {
       fetching: {
         counts: new Map()
       },
-      counts: {},
       entries: {},
       lazyResults: {},
       timeouts: {
@@ -90,34 +88,6 @@ class LazySync {
       this.fetchEntriesLater()
     }
     return entries[id]
-  }
-
-  clearCount (search = {}) {
-    const { model, counts, pending } = this
-    const query = { model, search }
-    const hash = LazySync.hash(JSON.stringify(query))
-    delete counts[hash]
-    delete pending.counts[hash]
-  }
-
-  count (search = {}, lazyList) {
-    const { model, cache, counts, pending } = this
-    const query = { model, search }
-    const hash = LazySync.hash(JSON.stringify(query))
-
-    if (typeof counts[hash] === 'number') {
-      return counts[hash]
-    } else if (lazyList) {
-      if (pending.counts.has(hash)) {
-        pending.counts.get(hash).add(lazyList)
-      } else {
-        const countHolders = new Set([lazyList])
-        pending.counts.set(hash, countHolders)
-
-        this.fetchCountsLater()
-      }
-    }
-    return cache.counts[hash] || 0
   }
 
   find (search = {}, options = {}) {
@@ -156,6 +126,28 @@ class LazySync {
       lazyResult.list.push(...entries)
     }
 
+    return lazyResult
+  }
+
+  refreshCount (lazyResult) {
+    const { cache, pending } = this
+    const { query } = lazyResult
+    const hash = LazySync.hash(JSON.stringify(query))
+
+    if (typeof cache.counts[hash] !== 'number') {
+      cache.counts[hash] = 0
+    }
+    lazyResult.count = cache.counts[hash]
+
+    // add lazyResult to pending lists fetchCountLater
+    if (pending.counts.has(hash)) {
+      pending.counts.get(hash).add(lazyResult)
+    } else {
+      const countHolders = new Set([lazyResult])
+      pending.counts.set(hash, countHolders)
+
+      this.fetchCountsLater()
+    }
     return lazyResult
   }
 
@@ -229,7 +221,7 @@ class LazySync {
   }
 
   fetchPendingCounts () {
-    const { model, pending, counts, fetching, cache, maxQueriesPerRequest } = this
+    const { model, pending, fetching, cache, maxQueriesPerRequest } = this
     const pendingCounts =
       Array.from(pending.counts.keys())
         .filter(hash => !fetching.counts.has(hash))
@@ -271,7 +263,7 @@ class LazySync {
           results
             .forEach((count, index) => {
               const hash = hashes[index]
-              counts[hash] = cache.counts[hash] = count || 0
+              cache.counts[hash] = count || 0
               fetching.counts.delete(hash)
               if (pending.counts.has(hash)) {
                 const lazyLists = pending.counts.get(hash)
@@ -368,7 +360,6 @@ class LazySync {
   invalidate () {
     this.changeIndex++
     this.pending.counts = new Map()
-    this.counts = {}
     for (const lazyResult of Object.values(this.lazyResults)) {
       lazyResult.invalidate()
     }
@@ -436,14 +427,12 @@ class LazyEntry {
 class LazyResult {
   constructor (model, query) {
     const changeIndex = 0
-    Object.assign(this, { model, query, changeIndex, _list: [], inSync: false })
+    Object.assign(this, { model, query, changeIndex, _count: 0, _list: [], inSync: false })
     this.invalidate()
   }
 
   invalidate () {
-    const { model, query } = this
-    const { search } = query
-    Z[model].clearCount(search)
+    const { model } = this
 
     Vue.set(this, 'inSync', false)
     Vue.delete(this, 'list')
@@ -462,10 +451,10 @@ class LazyResult {
     Object.defineProperty(this, 'count', {
       configurable: true,
       get: () => {
-        const count = Z[model].count(search, this)
         delete this.count // delete getter
-        Vue.set(this, 'count', count)
-        return count
+        Vue.set(this, 'count', this._count)
+        Z[model].refreshCount(this)
+        return this.count
       }
     })
   }
