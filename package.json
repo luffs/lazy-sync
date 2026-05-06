@@ -1,6 +1,6 @@
 {
   "name": "lazy-sync",
-  "version": "3.0.3",
+  "version": "3.0.4",
   "description": "",
   "type": "module",
   "main": "index.js",
@@ -18,9 +18,9 @@
     "@antfu/eslint-config": "^8.2.0",
     "eslint-plugin-format": "^2.0.1"
   },
-  "homepage": "https://gitlab.com/rb.luff/lazy-sync",
+  "homepage": "https://github.com/luffs/lazy-sync",
   "repository": {
     "type": "git",
-    "url": "https://gitlab.com/rb.luff/lazy-sync.git"
+    "url": "git+https://github.com/luffs/lazy-sync.git"
   }
 }
