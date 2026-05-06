@@ -1,2 +1,1 @@
-
 export { crud } from './LazyCrud'

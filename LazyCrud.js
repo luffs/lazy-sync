@@ -1,4 +1,4 @@
-import Sequelize, { literal, QueryTypes } from 'sequelize'
+import Sequelize, { QueryTypes } from 'sequelize'
 
 let db = {}
 let sequelize = null
